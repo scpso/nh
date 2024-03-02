@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.11'
+APP_VERSION='nh 0.4.12'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -112,7 +112,7 @@ exitFn() {
     if [ "$RUN_debug" -ge 1 ]; then
         printf '%sexit      %sln%5s%s: %s%s%s return: %s%s%s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[1]}" "$COLOR_0" "$COLOR_93" "$1" "$COLOR_0" >&2
     fi
-    return $1
+    return "$1"
 }
 
 warn() {
@@ -382,7 +382,6 @@ doReadNhftValue() {
     # we anticipate this may get called with empty params so don't check
     value="$(printf '%s\n' "$nhft" | grep "#### $key:")"
     # sed should not print line if match not found
-    # shellcheck disable=SC2016
     [ -z "$value" ] || value="$(printf '%s\n' "$value" | sed -nre 's/^[^`]+`([^`]*)`[^`]*$/\1/p')"
     debug "for key: $key found value: $value"
     printf '%s' "$value"
@@ -433,7 +432,7 @@ runCloneGhRepo() {
         printf 'the key is stored in the file ~/.ssh/%s.pub and copied below:\n\n' "$RUN_id" >&2
         cat ~/.ssh/"$RUN_id".pub >&2
         printf '\npress enter to proceed once this is done\n' >&2
-        read
+        read -r
         verbose1 'invoking git clone in foreground'
         git clone "git@github.com:$RUN_ghSlug.git" --config core.sshCommand="ssh -i ~/.ssh/$RUN_id" || fatal 'git clone failed'
     else
@@ -452,10 +451,10 @@ runEdit() {
             id="$(basename "$filePath")" && debug "set id: $id"
             output "$(doPrintMeta "$id")"
         done
-    elif ! [ -e "$matches" ]; then
+    elif ! [ -e "${matches[0]}" ]; then
         fatal "No note found matching id: $RUN_id*"
     else
-        meta="$(cat "$matches")"
+        meta="$(cat "${matches[0]}")"
         RUN_id="$(doReadNhftValue "$meta" 'uuid')"
         verbose1 "edit matched id: $RUN_id"
         [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
@@ -639,19 +638,19 @@ preprocessCommandLine() {
     # no entry debug as we haven't read debug option yet
     # we defer messages until debug & color are configured
 
-    RUN_commandLine=$@
+    RUN_commandLine=("$@")
 
     local colorMode
 
     # manual check for --debug option before all other processing
     # must be first to enable future debug calls
-    if [[ "$RUN_commandLine" = *--debug* ]]; then
+    if [[ "${RUN_commandLine[*]}" = *--debug* ]]; then
         RUN_debug=1
     else
         RUN_debug=0
     fi
     # manual check for NO_COLOR env variable or --no-color option
-    if [ -z "$NO_COLOR" ] && [[ "$RUN_commandLine" != *--no-color* ]] && tty -s; then
+    if [ -z "$NO_COLOR" ] && [[ "${RUN_commandLine[*]}" != *--no-color* ]] && tty -s; then
         COLOR_33="$(printf '\e[33m')"
         COLOR_93="$(printf '\e[93m')"
         COLOR_90="$(printf '\e[90m')"
@@ -668,7 +667,7 @@ preprocessCommandLine() {
     # deferred entry message
     enterFn
     # deferred set message
-    debug "set RUN_commandLine: $RUN_commandLine"
+    debug "set RUN_commandLine: ${RUN_commandLine[*]}"
     [ "$colorMode" -gt 0 ] && debug 'running in color mode'
     [ "$colorMode" -eq 0 ] && debug 'running in no-color mode'
     exitFn 0
@@ -745,6 +744,9 @@ readEnvironmentVariables() {
     exitFn 0
 }
 
+# shellcheck disable=SC2120
+# complains "references arguments, but none are ever passed"
+# but these arguments are provided by 'eval set' command so we can ignore
 processCommandLine() {
     enterFn
 
@@ -754,17 +756,17 @@ processCommandLine() {
     getopt --test
     [ $? -ne 4 ] && fatal 'enhanced getopt unavailable'
 
-    # run getopt twice just to report fatal error and then setup parsed variable
+    # run getopt twice just to report usage error and then setup parsed variable
     # how we want
     parsed=$(getopt --options=$APP_OPTS_SHORT \
         --longoptions=$APP_OPTS_LONG \
         --quiet-output \
-        -- $RUN_commandLine 2>&1)
+        -- "${RUN_commandLine[@]}" 2>&1)
     [ -n "$parsed" ] && usageError "$parsed"
     # if the above didn't generate usage error, we continue
     parsed=$(getopt --options=$APP_OPTS_SHORT \
         --longoptions=$APP_OPTS_LONG \
-        -- $RUN_commandLine)
+        -- "${RUN_commandLine[@]}")
 
     # short circuit help and version
     # read getopt’s output this way to handle the quoting right:
@@ -927,33 +929,34 @@ changeToDataDir() {
         mkdir --parents "$RUN_dataDir" || fatal 'Could not create RUN_dataDir'
     fi
     cd "$RUN_dataDir" || fatal "could not change directory to RUN_dataDir: $RUN_dataDir"
-    debug "changed directory to RUN_dataDir: $RUN_dataDir"
+    verbose1 "changed directory to RUN_dataDir: $RUN_dataDir"
     exitFn 0
 }
 
 changeToRepoDir() {
     enterFn
-    verbose1 "creating nh repo: $RUN_repo"
     [ -d "$RUN_dataDir"/"$RUN_repo" ] || fatal "no nh repo: $RUN_repo; run --new-lrepo or --clone-ghrepo"
     cd "$RUN_dataDir"/"$RUN_repo" || fatal "could not change directory to RUN_repo: $RUN_repo"
-    debug "changed directory to RUN_repo: $RUN_repo"
+    verbose1 "changed directory to RUN_repo: $RUN_repo"
     exitFn 0
 }
 
 checkRepoConsistency() {
     enterFn
 
-    local gitStatus
+    local tempFiles gitStatus
 
-    # TODO more intellegent handling of this case
-    [ -e ./temp/* ] && fatal "File in ./temp; nh shutdown unexpectedly; please repair"
+    tempFiles=(./temp/*)
+    if [ "${#tempFiles[@]}" -ge 2 ] || [ -e "${tempFiles[0]}" ]; then
+        fatal "File in nh repo ./temp; nh shutdown unexpectedly? please repair"
+    fi
 
     gitStatus="$(git status --porcelain=2 2>&1)" && debug "set gitStatus: $gitStatus"
 
     if [ "${gitStatus:0:27}" = 'fatal: not a git repository' ]; then
         fatal "not a git repo"
     elif [ -n "$gitStatus" ]; then
-        fatal 'nh repo is in inconsistent state'
+        fatal 'nh repo is in inconsistent state; please repair'
     fi
 
     exitFn 0
@@ -1041,6 +1044,6 @@ mainProcess() {
     exitFn 0
 }
 
-preprocessCommandLine $@
+preprocessCommandLine "$@"
 mainProcess
 terminate
