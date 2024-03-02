@@ -1,0 +1,1046 @@
+#!/usr/bin/env bash
+#
+# nh - Note Here
+#
+# MIT License
+#
+# Copyright (c) 2024 scpso
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# app consts #
+
+APP_VERSION='nh 0.4.11'
+APP_DEPENDENCIES=(date git ssh uuidgen)
+APP_USAGE='nh - Note Here
+Options:
+    -A,     --all               use with --list; all pwds (including null)
+            --clone-ghrepo=SLUG clone an exiting nh repo hosted on github.com,
+                                SLUG is username/reponame, use with
+                                --deploy-key or --gen-deploy-key
+            --debug             run in debug mode
+            --deploy-key=FILE   use with --clone-ghrepo, provide path to
+                                existing ssh key to use
+    -e=ID,  --edit=ID           edit existing note
+            --gen-deploy-key    use with --clone-ghrepo, nh will generate an
+                                ssh deploy key which must be added to the repo
+                                via github.com
+    -h,     --help              print help and exit
+    -l,     --list              list existing notes
+            --list-repos        list all nh repos
+            --list-tags         list all indexed tags
+            --new-lrepo         initialises local nh repo
+            --no-color          prevent color in output
+            --nuke-repo         delete local copy of repo
+    -N,     --null              null pwd
+    -R=NAME,--repo=NAME         specify which nh repo to access; if not
+                                specified the default repo will be used
+    -T=TAG, --tag=TAG           use with --list; output tagged files. Implies
+                                --all
+    -V,     --version           print version and exit
+    -v,     --verbose[=NUM]     verbose output'
+APP_OPTS_LONG=all,clone-ghrepo:,debug,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,new-lrepo,no-color,nuke-repo,null,repo:,tag:,verbose::,version
+APP_OPTS_SHORT=Ae:hlNR:T:vV
+APP_DIR_NAME=nh
+APP_DEFAULT_REPO=default
+APP_CONFIG_NAME=.nhconf.nh.md
+
+# filetype consts #
+
+FT_VERSION='nhft 0.2.0'
+FT_TAG_MARK='## nh tags ##'
+FT_META_MARK='## nh metadata ##'
+FT_EXT='nh.md'
+FT_DEFAULT_NOTE='NewNote'
+FT_DEFAULT_TAGS=''
+FT_GUIDE='## nh guide ##
+#### 1. The first line is the title.
+#### 2. The remaining contents constitute the note
+#### 3. Add or remove line-separated tags below the ## nh tags ## line
+#### 3. Everything below the ## nh metadata ## line is auto-generated'
+
+# helper functions #
+
+output() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%soutput    %sln%5s%s: %s\n' "$COLOR_92" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" >&2
+    else
+        printf '%s\n' "$*"
+    fi
+}
+
+# because this is an interactive program that will generate output that user
+# might want to pipe to other text-processing programs we will always write
+# verbose to stderr
+verbose1() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%sverbose   %sln%5s%s: %s\n' "$COLOR_95" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" >&2
+    elif [ "$RUN_verbose" -ge 1 ]; then
+        printf '%sverbose%s: %s\n' "$COLOR_95" "$COLOR_0" "$*" >&2
+    fi
+}
+
+debug() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%sdebug     %sln%5s%s: %s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" >&2
+    fi
+}
+
+enterFn() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%senter     %sln%5s%s: %s%s%s %s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[1]}" "$COLOR_0" "$*" >&2
+    fi
+}
+
+exitFn() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%sexit      %sln%5s%s: %s%s%s return: %s%s%s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[1]}" "$COLOR_0" "$COLOR_93" "$1" "$COLOR_0" >&2
+    fi
+    return $1
+}
+
+warn() {
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%swarn      %sln%5s%s: %s\n' "$COLOR_33" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" >&2
+    else
+        printf '%swarn%s: %s\n' "$COLOR_33" "$COLOR_0" "$*" >&2
+    fi
+}
+
+usageError() {
+    local exitCode
+    exitCode=2
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%susage err %sln%5s%s: %s %sexit: %s%s\n' "$COLOR_91" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" "$COLOR_91" "$exitCode" "$COLOR_0" >&2
+    else
+        printf '%susage err%s: %s\n' "$COLOR_91" "$COLOR_0" "$*" >&2
+    fi
+    printf '%s\n' "$APP_USAGE"
+    exit "$exitCode"
+}
+
+fatal() {
+    local exitCode
+    exitCode=1
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%sfatal     %sln%5s%s: %s %sexit: %s%s\n' "$COLOR_91" "$COLOR_93" "${BASH_LINENO[0]}" "$COLOR_0" "$*" "$COLOR_91" "$exitCode" "$COLOR_0" >&2
+        local callStackIndex callStackDepth
+        callStackIndex=1 #ignore 0th because we just reported it above
+        callStackDepth=$((${#BASH_LINENO[@]}-1)) #ignore Nth because its just line 0; main
+        while [ "$callStackIndex" -lt "$callStackDepth" ]; do
+            printf '%scaller    %sln%5s%s: %s%s%s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[$callStackIndex]}" "$COLOR_0" >&2
+            callStackIndex=$((callStackIndex+1))
+        done
+    else
+        printf '%sfatal%s: %s\n' "$COLOR_91" "$COLOR_0" "$*" >&2
+    fi
+    exit "$exitCode"
+}
+
+terminate() {
+    local exitCode
+    exitCode=0
+    if [ "$RUN_debug" -ge 1 ]; then
+        printf '%sterminate %sln%5s%s: %s%s%s exit: %s%s%s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[1]}" "$COLOR_0" "$COLOR_93" "$exitCode" "$COLOR_0" >&2
+    fi
+    exit "$exitCode"
+}
+
+
+# Main Functions #
+
+doMakeTempFile() {
+    enterFn
+    local note tags meta
+
+    if ! [ -f ./notes/"$RUN_id" ] && ! [ -f ./tags/"$RUN_id" ] && ! [ -f ./meta/"$RUN_id" ]; then
+        verbose1 "new note id: $RUN_id"
+        note=$FT_DEFAULT_NOTE
+        [ -d ./notes ] || mkdir notes || fatal 'Could not create notes dir'
+        printf '%s\n' "$note" >./notes/"$RUN_id"
+        tags=$FT_DEFAULT_TAGS
+        [ -d ./tags ] || mkdir tags || fatal 'Could not create tags dir'
+        printf '%s\n' "$tags" >./tags/"$RUN_id"
+
+        local dateTimeUtc dateTimeLocal dateLocal
+        dateTimeUtc="$(date --iso-8601=seconds --utc)" && debug "set dateTimeUtc: $dateTimeUtc"
+        dateTimeLocal="$(date --iso-8601=seconds -d "$dateTimeUtc")"
+        dateLocal="${dateTimeLocal:0:10}"
+        meta="#### version: \`$FT_VERSION\`
+#### title: \`\`
+#### pwd: \`$RUN_pwd\`
+#### repo: \`$RUN_repo\`
+#### created: \`$dateLocal\`
+#### createdDTLocal: \`$dateTimeLocal\`
+#### createdDTUtc: \`$dateTimeUtc\`
+#### modified: \`$dateLocal\`
+#### modifiedDTLocal: \`$dateTimeLocal\`
+#### modifiedDTUtc: \`$dateTimeUtc\`
+#### uuid: \`$RUN_id\`"
+        [ -d ./meta ] || mkdir meta || fatal 'Could not create meta dir'
+        printf '%s\n' "$meta" >./meta/"$RUN_id"
+    elif [ -f ./notes/"$RUN_id" ] && [ -f ./tags/"$RUN_id" ] && [ -f ./meta/"$RUN_id" ]; then
+        verbose1 "existing note id: $RUN_id"
+        note="$(cat ./notes/"$RUN_id")"
+        tags="$(cat ./tags/"$RUN_id")"
+        meta="$(cat ./meta/"$RUN_id")"
+    else
+        fatal "Inconsistent repo state of notes, tags, meta for uuid: $RUN_id"
+    fi
+
+    [ -d ./temp ] || mkdir temp || fatal 'Could not create temp dir'
+
+    printf '%s\n\n\n%s\n%s\n\n%s\n%s\n\n%s\n' "$note" "$FT_TAG_MARK" "$tags" "$FT_META_MARK" "$meta" "$FT_GUIDE" >./temp/"$RUN_id.$FT_EXT" && debug "write-out to: ./temp/$RUN_id.$FT_EXT"
+    exitFn 0
+}
+
+# returns 0 if contents changes, 1 if contents did not change
+doEditTempFile() {
+    enterFn
+
+    local oldContent newContent
+    oldContent="$(cat ./temp/"$RUN_id.$FT_EXT")"
+    if command -v "$EDITOR" >/dev/null; then
+        verbose1 "launching \$EDITOR: $EDITOR"
+        "$EDITOR" ./temp/"$RUN_id.$FT_EXT"
+    elif command -v nano >/dev/null; then
+        warn '$EDITOR env var not set to runnable program; falling back to nano'
+        nano ./temp/"$RUN_id.$FT_EXT"
+    else
+        warn '$EDITOR env var not set to runnable program; fallback nano not found; cannot edit file'
+    fi
+    newContent="$(cat ./temp/"$RUN_id.$FT_EXT")"
+    if [ "$oldContent" = "$newContent" ]; then
+        verbose1 'no change in content detected'
+        exitFn 1
+    else
+        verbose1 'change in content detected'
+        exitFn 0
+    fi
+}
+
+doStoreChanges() {
+    enterFn
+    local content note tags meta tagsLine metaLine
+
+    content="$(cat ./temp/"$RUN_id.$FT_EXT")"
+
+    #find the tags marker in the file, output with line number
+    if tagsLine="$(printf '%s\n' "$content" | grep -n "^$FT_TAG_MARK$")"; then
+        #use sed to get just the line number at the front of the line
+        tagsLine="$(printf '%s\n' "$tagsLine" | sed -re 's/^([0-9]+).*/\1/')"
+    else
+        warn "Cannot find FT_TAG_MARK: $FT_TAG_MARK; did you edit it? Please don't… note contents may be in weird state"
+        unset -v tagsLine
+    fi
+    #find the meta marker in the file, output with line number
+    if metaLine="$(printf '%s\n' "$content" | grep -n "^$FT_META_MARK$")"; then
+        #use sed to get just the line number at the front of the line
+        metaLine="$(printf '%s\n' "$metaLine" | sed -re 's/^([0-9]+).*/\1/')"
+    else
+        warn "Cannot find FT_META_MARK: $FT_META_MARK; did you edit it? Please don't… note contents may be in weird state"
+        unset -v metaLine
+    fi
+
+    if [ -n "$metaLine" ]; then
+        content="$(printf "%s\n" "$content" | head -n "$(("$metaLine"-1))")"
+    fi
+    if [ -n "$tagsLine" ]; then
+        note="$(printf "%s\n" "$content" | head -n "$(("$tagsLine"-1))" | cat)"
+        tags="$(printf "%s\n" "$content" | tail -n +"$(("$tagsLine"+1))" | cat)"
+    else
+        note="$content"
+    fi
+
+    if [ "$note" != "$(cat ./notes/"$RUN_id")" ]; then
+        meta="$(cat ./meta/"$RUN_id")"
+
+        local title
+        title="$(printf '%s\n' "$content" | head -n 1 )"
+        [ "${#title}" -ge 51 ] && title="${title:0:49}…"
+        meta="$(doUpdateNhftValue "$meta" 'title' "$title")"
+
+        local dateTimeUtc dateTimeLocal dateLocal
+        dateTimeUtc="$(date --iso-8601=seconds --utc)" && debug "set dateTimeUtc: $dateTimeUtc"
+        meta="$(doUpdateNhftValue "$meta" 'modifiedDTUtc' "$dateTimeUtc")"
+        dateTimeLocal="$(date --iso-8601=seconds -d "$dateTimeUtc")"
+        meta="$(doUpdateNhftValue "$meta" 'modifiedDTLocal' "$dateTimeLocal")"
+        dateLocal="${dateTimeLocal:0:10}"
+        meta="$(doUpdateNhftValue "$meta" 'modified' "$dateLocal")"
+
+        printf '%s\n' "$note" >./notes/"$RUN_id" && debug "write-out \$note to: ./notes/$RUN_id"
+        printf '%s\n' "$meta" >./meta/"$RUN_id" && debug "write-out \$meta to: ./meta/$RUN_id"
+    fi
+
+    if [ "$tags" != "$(cat ./tags/"$RUN_id")" ]; then
+        printf '%s\n' "$tags" >./tags/"$RUN_id" && debug "write-out \$tags to: ./tags/$RUN_id"
+    fi
+    exitFn 0
+}
+
+doRmTempFile() {
+    enterFn
+    if [ -f ./temp/"$RUN_id.$FT_EXT" ]; then
+        rm ./temp/"$RUN_id.$FT_EXT" || fatal "could not rm temp file: ./temp/$RUN_id.$FT_EXT"
+    fi
+    exitFn 0
+}
+
+doUpdateIndexes() {
+    enterFn
+    local meta metaPwd goodTags badTags
+    meta="$(cat ./meta/"$RUN_id")"
+    [ -d ./index_pwd ] || mkdir ./index_pwd || fatal 'Could not create index_pwd dir'
+    [ -d ./index_tags ] || mkdir ./index_tags || fatal 'Could not create index_tags dir'
+    find ./index_pwd -name "$RUN_id" -delete
+    find ./index_tags -name "$RUN_id" -delete
+    find ./index_pwd -empty -type d -delete
+    find ./index_tags -empty -type d -delete
+    metaPwd="$(doReadNhftValue "$meta" 'pwd')"
+    [ -d ./index_pwd"$metaPwd" ] || mkdir --parents ./index_pwd"$metaPwd" || fatal 'Could not create index_pwd tree'
+    touch ./index_pwd"$metaPwd"/"$RUN_id" || fatal 'Could not create index_pwd file'
+    verbose1 "indexed pwd: $metaPwd"
+    readarray -t badTags < <(grep -E '(^[_-].*$|^.*[^A-Za-z0-9_-].*$)' ./tags/"$RUN_id")
+    readarray -t goodTags < <(grep -E '^[A-Za-z0-9][A-Za-z0-9_-]+$' ./tags/"$RUN_id")
+    for tag in "${badTags[@]}"; do
+        [ -n "$tag" ] && warn "Tags can only use chars [A-Za-z0-9_-] and must start with [A-Za-z0-9]; ignoring tag: $tag"
+    done
+    for tag in "${goodTags[@]}"; do
+        if [ -n "$tag" ]; then
+            [ -d ./index_tags/"$tag" ] || mkdir --parents ./index_tags/"$tag" || fatal "Could not create index_tags dir: $tag"
+            touch ./index_tags/"$tag"/"$RUN_id" || fatal "Could not create index_tags file: ./index_tags/$tag/$RUN_id"
+            verbose1 "indexed tag: $tag"
+        fi
+    done
+    verbose1 'Updated indexes; committing changes'
+    git add ./index_pwd* ./index_tags/* >/dev/null 2>&1
+    git commit -m "nh_bot index $RUN_id" >/dev/null
+    exitFn 0
+}
+
+# returns 0 if successfully finds and prints meta, else returns 1
+doPrintMeta() {
+    enterFn "$1"
+    local id meta
+    id="$1"
+    [ -n "$id" ] || fatal 'Internal error: doPrintMeta() called with no argument'
+    if [ -f ./meta/"$id" ]; then
+        meta="$(cat ./meta/"$id")"
+        printf '%s%s%s %s %s %s%s%s %s%s%s\n' \
+            "$COLOR_33" \
+            "${id:0:8}" \
+            "$COLOR_0" \
+            "$(doReadNhftValue "$meta" 'created')" \
+            "$(doReadNhftValue "$meta" 'modified')" \
+            "$COLOR_90" \
+            "$(doReadNhftValue "$meta" 'pwd' | sed -re "s/$RUN_sed_escaped_pwd/./" -e "s/$RUN_sed_escaped_home/~/")" \
+            "$COLOR_0" \
+            "$COLOR_93" \
+            "$(doReadNhftValue "$meta" 'title')" \
+            "$COLOR_0"
+        exitFn 0
+    else
+        warn "Internal error or inconsistent repo; could not find ./meta/$id"
+        exitFn 1
+    fi
+}
+
+doGitInit() {
+    enterFn
+    verbose1 'Initialising local git repo'
+    git init --quiet --initial-branch nh_bot
+    git config --local user.name nh_bot
+    git config --local user.email nh_bot
+    printf '#nh_bot\n' >README.md && debug 'write-out to ./README.md'
+    git add -A
+    git commit -m 'nh_bot init local repo' >/dev/null
+    exitFn 0
+}
+
+doReadNhftValue() {
+    # because $1 is a large object we don't print it to debug
+    enterFn "${1:0:7}… $2"
+    local nhft key value
+    nhft="$1"
+    key="$2"
+    # we anticipate this may get called with empty params so don't check
+    value="$(printf '%s\n' "$nhft" | grep "#### $key:")"
+    # sed should not print line if match not found
+    # shellcheck disable=SC2016
+    [ -z "$value" ] || value="$(printf '%s\n' "$value" | sed -nre 's/^[^`]+`([^`]*)`[^`]*$/\1/p')"
+    debug "for key: $key found value: $value"
+    printf '%s' "$value"
+    exitFn 0
+}
+
+doUpdateNhftValue() {
+    # because $1 is a large object we don't print it to debug
+    enterFn "${1:0:7}… $2 $3"
+    local nhft key value output
+    nhft="$1"
+    key="$2"
+    # escape special chars for RHS of sed replace
+    value="$(printf '%s' "$3"  | sed -re 's/[\/&]/\\&/g')"
+    [ -n "$nhft" ] || fatal 'Internal error: doUpdateNhftValue() called with no nhft argument'
+    [ -n "$key" ] || fatal 'Internal error: doUpdateNhftValue() called with no key argument'
+    # don't check for populated value as we might expect it to be empty in practice
+    output="$(printf '%s\n' "$nhft" | sed -re "s/^#### $key:.*$/#### $key: \`$value\`/")"
+    if [ "$nhft" = "$output" ]; then
+        debug "no change was made for key: $key and value: $value"
+    else
+        debug "for key: $key updated value: $value"
+    fi
+    printf '%s' "$output"
+    exitFn 0
+}
+
+# run functions #
+
+runCloneGhRepo() {
+    enterFn
+    local slugSedRegex slugBasename
+    slugSedRegex='^[A-Za-z0-9\._-]+\/[A-Za-z0-9\._-]+$'
+    verbose1 "matching slug $RUN_ghSlug against regex $slugSedRegex"
+    [ -n "$(sed -nE "s/$slugSedRegex/match/p" <<<"$RUN_ghSlug")" ] || fatal "$RUN_ghSlug is not a valid github slug; please use username/reponame"
+    slugBasename="$(basename "$RUN_ghSlug")"
+    [ -d "$slugBasename" ] && fatal "nh repo named $slugBasename already exists"
+    if [[ "$RUN_options" = *--deploy-key* ]]; then
+        [ -f "$RUN_deployKey" ] || fatal "cannot find supplied deploy key $RUN_deployKey"
+        verbose1 'invoking git clone in foreground'
+        git clone "git@github.com:$RUN_ghSlug.git" --config core.sshCommand="ssh -i $RUN_deployKey" || fatal 'git clone failed'
+    elif [[ "$RUN_options" = *--gen-deploy-key* ]]; then
+        RUN_id="$(uuidgen --random)" && debug "set RUN_id: $RUN_id"
+        ssh-keygen -t ed25519 -C "nh gh deploy key $RUN_ghSlug" -f ~/.ssh/"$RUN_id" -N '' >/dev/null
+        printf 'before nh can clone the repo, you must add a deploy key to the repo via github.com\n' >&2
+        printf 'please navigate to: https://github.com/%s/settings/keys\n' "$RUN_ghSlug" >&2
+        printf 'add a new deploy key and ensure it has write accces\n' >&2
+        printf 'the key is stored in the file ~/.ssh/%s.pub and copied below:\n\n' "$RUN_id" >&2
+        cat ~/.ssh/"$RUN_id".pub >&2
+        printf '\npress enter to proceed once this is done\n' >&2
+        read
+        verbose1 'invoking git clone in foreground'
+        git clone "git@github.com:$RUN_ghSlug.git" --config core.sshCommand="ssh -i ~/.ssh/$RUN_id" || fatal 'git clone failed'
+    else
+        usageError 'must use --deploy-key or --gen-deploy-key option with --clone-ghrepo'
+    fi
+    exitFn 0
+}
+
+runEdit() {
+    enterFn
+    local matches meta
+    matches=(./meta/"$RUN_id"*)
+    if [ "${#matches[@]}" -ge 2 ]; then
+        warn "Multiple notes found with id: $RUN_id*; provide more chars"
+        for filePath in "${matches[@]}"; do
+            id="$(basename "$filePath")" && debug "set id: $id"
+            output "$(doPrintMeta "$id")"
+        done
+    elif ! [ -e "$matches" ]; then
+        fatal "No note found matching id: $RUN_id*"
+    else
+        meta="$(cat "$matches")"
+        RUN_id="$(doReadNhftValue "$meta" 'uuid')"
+        verbose1 "edit matched id: $RUN_id"
+        [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
+        doMakeTempFile
+        if doEditTempFile; then
+            doStoreChanges
+            verbose1 'Note updated; committing changes'
+            git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
+            git commit -m "nh_bot update $RUN_id"  >/dev/null
+            doUpdateIndexes
+            invokeBackgroundGitPush
+        fi
+        doRmTempFile
+    fi
+    exitFn 0
+}
+
+runList() {
+    enterFn
+    if [[ "$RUN_options" = *--tag* ]]; then
+        if [ -d ./index_tags/"$RUN_tag" ]; then
+            verbose1 "found index_tags dir: ./index_tags/$RUN_tag"
+            for filePath in ./index_tags/"$RUN_tag"/*; do
+                id="$(basename "$filePath")" && debug "set id: $id"
+                output "$(doPrintMeta "$id")"
+            done
+        else
+            verbose1 "no results for index_tags dir: ./index_tags/$RUN_tag"
+        fi
+    elif [[ "$RUN_options" = *--all* ]]; then
+        verbose1 'listing all'
+        for filePath in ./meta/*; do
+            id="$(basename "$filePath")" && debug "set id: $id"
+            output "$(doPrintMeta "$id")"
+        done
+    elif [ -d ./index_pwd"$RUN_pwd" ]; then
+        verbose1 "found index_pwd dir: ./index_pwd$RUN_pwd"
+        for filePath in ./index_pwd"$RUN_pwd"/*; do
+            id="$(basename "$filePath")" && debug "set id: $id"
+            # test for valid uuid (child dirs will exist inside matching dir)
+            if printf '%s\n' "$id" | grep -E '^[0-9a-f-]{36}$' >/dev/null; then
+                output "$(doPrintMeta "$id")"
+            else
+                debug 'not a valid uuid'
+            fi
+        done
+    else
+        verbose1 "no results for index_pwd dir: ./index_pwd$RUN_pwd"
+    fi
+    exitFn 0
+}
+
+runListRepos() {
+    enterFn
+    #local repos
+    for dirPath in */.git; do
+        output "$(printf '%s%s%s\n' "$COLOR_94" "$(dirname "$dirPath")" "$COLOR_0")"
+    done
+    exitFn 0
+}
+
+runListTags() {
+    enterFn
+    for dirPath in ./index_tags/*; do
+        output "$(printf '%s%s%s\n' "$COLOR_93" "$(basename "$dirPath")" "$COLOR_0")"
+    done
+    exitFn 0
+}
+
+runNew() {
+    enterFn
+    RUN_id="$(uuidgen --random)" && debug "set RUN_id: $RUN_id"
+    doMakeTempFile
+    if doEditTempFile; then
+        doStoreChanges
+        verbose1 'New note added; committing changes'
+        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
+        git commit -m "nh_bot new $RUN_id" >/dev/null
+        doUpdateIndexes
+        invokeBackgroundGitPush
+    else
+        rm ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id" || fatal 'unable to remove abandoned new note'
+        verbose1 'removed abandoned new note'
+    fi
+    doRmTempFile
+    exitFn 0
+}
+
+runNewLRepo() {
+    enterFn
+    [ -d "$RUN_repo" ] && fatal "Repo $RUN_repo already exists"
+    mkdir "$RUN_repo" || fatal "Could not create repo dir $RUN_repo"
+    changeToRepoDir
+    doGitInit
+    exitFn 0
+}
+
+runNukeRepo() {
+    enterFn
+    # remembering the spicy steam code that deleted users' data
+    # let's be a bit more deliberate about what we delete here
+
+    # lets assure ourselves values are set before executing
+    local repoDir
+    repoDir="$RUN_dataDir"/"$RUN_repo"
+
+    if [ -n "$repoDir" ] && [ -d "$repoDir" ]; then
+        if [ "$repoDir" != "$PWD" ]; then
+            fatal "cannot nuke-repo, nh is not running in repoDir: $repoDir"
+        else
+            verbose1 "nuke-repo running in repoDir: $repoDir"
+        fi
+        if [ -d ./notes ]; then
+            rm -r ./notes || fatal 'nuke-repo failed, cannot rm ./notes'
+            verbose1 'nuke-repo removed ./notes'
+        else
+            warn 'nuke-repo cannot find ./notes; repo is in unexpected state'
+        fi
+        if [ -d ./tags ]; then
+            rm -r ./tags || fatal 'nuke-repo failed, cannot rm ./tags'
+            verbose1 'nuke-repo removed ./tags'
+        else
+            warn 'nuke-repo cannot find ./tags; repo is in unexpected state'
+        fi
+        if [ -d ./meta ]; then
+            rm -r ./meta || fatal 'nuke-repo failed, cannot rm ./meta'
+            verbose1 'nuke-repo removed ./meta'
+        else
+            warn 'nuke-repo cannot find ./meta; repo is in unexpected state'
+        fi
+        if [ -d ./index_pwd ]; then
+            rm -r ./index_pwd || fatal 'nuke-repo failed, cannot rm ./index_pwd'
+            verbose1 'nuke-repo removed ./index_pwd'
+        else
+            warn 'nuke-repo cannot find ./index_pwd; repo is in unexpected state'
+        fi
+        if [ -d ./index_tags ]; then
+            rm -r ./index_tags || fatal 'nuke-repo failed, cannot rm ./index_tags'
+            verbose1 'nuke-repo removed ./index_tags'
+        else
+            warn 'nuke-repo cannot find ./index_tags; repo is in unexpected state'
+        fi
+        if [ -d ./temp ]; then
+            rm -r ./temp || fatal 'nuke-repo failed, cannot rm ./temp'
+            verbose1 'nuke-repo removed ./temp'
+        else
+            warn 'nuke-repo cannot find ./temp; repo is in unexpected state'
+        fi
+
+        # I don't like this but I don't know of a git command to achieve it
+        # TODO make safer
+        if [ -d ./.git ]; then
+            rm -rf ./.git || fatal 'nuke-repo failed, cannot rm ./.git'
+            verbose1 'nuke-repo removed ./.git'
+        else
+            warn 'nuke-repo cannot find ./.git; repo is in unexpected state'
+        fi
+
+        if [ -e ./README.md ]; then
+            rm ./README.md || fatal 'nuke-repo failed, cannot rm ./README.md'
+            verbose1 'nuke-repo removed ./README.md'
+        else
+            warn 'nuke-repo cannot find ./README.md; repo is in unexpected state'
+        fi
+
+        # we expect to currently be in $repoDir so move one step higher
+        cd ../ || fatal 'nuke-repo failed, cannot move to parent dir'
+        rmdir "$repoDir" || fatal "nuke-repo failed, cannot rm repoDir: $repoDir"
+        verbose1 "nuke-repo removed repoDir: $repoDir"
+    else
+        warn "nothing to nuke-repo: could not find repoDir: $repoDir"
+    fi
+    # force early exit here so we don't accidentally fall-through to further processing
+    # now that all these dirs are deleted
+    terminate
+}
+
+# pre-cli environment checking #
+
+preprocessCommandLine() {
+    # no entry debug as we haven't read debug option yet
+    # we defer messages until debug & color are configured
+
+    RUN_commandLine=$@
+
+    local colorMode
+
+    # manual check for --debug option before all other processing
+    # must be first to enable future debug calls
+    if [[ "$RUN_commandLine" = *--debug* ]]; then
+        RUN_debug=1
+    else
+        RUN_debug=0
+    fi
+    # manual check for NO_COLOR env variable or --no-color option
+    if [ -z "$NO_COLOR" ] && [[ "$RUN_commandLine" != *--no-color* ]] && tty -s; then
+        COLOR_33="$(printf '\e[33m')"
+        COLOR_93="$(printf '\e[93m')"
+        COLOR_90="$(printf '\e[90m')"
+        COLOR_91="$(printf '\e[91m')"
+        COLOR_92="$(printf '\e[92m')"
+        COLOR_93="$(printf '\e[93m')"
+        COLOR_94="$(printf '\e[94m')"
+        COLOR_95="$(printf '\e[95m')"
+        COLOR_0="$(printf '\e[0m')"
+        colorMode=1
+    else
+        colorMode=0
+    fi
+    # deferred entry message
+    enterFn
+    # deferred set message
+    debug "set RUN_commandLine: $RUN_commandLine"
+    [ "$colorMode" -gt 0 ] && debug 'running in color mode'
+    [ "$colorMode" -eq 0 ] && debug 'running in no-color mode'
+    exitFn 0
+}
+
+checkForDependencies() {
+    enterFn
+    for dep in "${APP_DEPENDENCIES[@]}"; do
+        ! command -v "$dep" 1>/dev/null && fatal "dependency $dep unavailable"
+    done
+    exitFn 0
+}
+
+setRunVariableDefaults() {
+    enterFn
+    local dataHome
+    RUN_command=''
+    RUN_dataDir=''
+    RUN_deployKey=''
+    RUN_ghSlug=''
+    RUN_id=''
+    RUN_options=''
+    RUN_pwd="$PWD" && debug "set RUN_pwd: $RUN_pwd"
+    RUN_repo="$APP_DEFAULT_REPO" && debug "set default RUN_repo: $RUN_repo"
+    # escaped for variables in LHS (PATTERN) of sed
+    RUN_sed_escaped_home=''
+    RUN_sed_escaped_pwd=''
+    RUN_tag=''
+    RUN_verbose=0 && debug "set default RUN_verbose: $RUN_verbose"
+    if [ -n "$XDG_DATA_HOME" ]; then
+        dataHome="$XDG_DATA_HOME" && debug "set dataHome from XDG_DATA_HOME env: $dataHome"
+    else
+        dataHome="$HOME"/.local/share && debug "set default dataHome: $dataHome"
+    fi
+    RUN_dataDir="$dataHome"/"$APP_DIR_NAME" && debug "set RUN_dataDir: $RUN_dataDir"
+    exitFn 0
+}
+
+readConfigFile() {
+    enterFn
+    local configFile config configRepo
+    if [ -f "$NH_CONFIG" ]; then
+        debug 'found NH_CONFIG env variable'
+        configFile="$NH_CONFIG" && debug "set configFile: $configFile"
+    elif [ -f "$XDG_CONFIG_HOME"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
+        debug 'found config via XDG_CONFIG_HOME env variable'
+        configFile="$XDG_CONFIG_HOME"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" && debug "set configFile: $configFile"
+    elif [ -f "$HOME"/.config/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
+        debug 'found config via $HOME/.config'
+        configFile="$HOME"/.config/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" && debug "set configFile: $configFile"
+    elif [ -n "$XDG_CONFIG_DIRS" ]; then
+        for d in ${XDG_CONFIG_DIRS//:/ }; do
+            if [ -f "$d"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
+                debug 'found config via XDG_CONFIG_DIRS env variable'
+                configFile="$d"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" && debug "set configFile: $configFile"
+            fi
+        done
+    elif [ -f /etc/xdg/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
+        debug 'found config via /etc/xdg'
+        configFile=etc/xdg/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" && debug "set configFile: $configFile"
+    fi
+    if [ -n "$configFile" ]; then
+        debug "reading configFile: $configFile"
+        config="$(cat "$configFile")"
+        configRepo="$(doReadNhftValue "$config" 'defaultRepo')" && debug "set configRepo: $configRepo"
+        [ -n "$configRepo" ] && RUN_repo="$configRepo" && debug "set RUN_repo from configFile: $RUN_repo"
+    fi
+    exitFn 0
+}
+
+readEnvironmentVariables() {
+    enterFn
+    [ -n "$NH_DEFAULT_REPO" ] && RUN_repo="$NH_DEFAULT_REPO" && debug "set RUN_repo from env NH_DEFAULT_REPO: $RUN_repo"
+    exitFn 0
+}
+
+processCommandLine() {
+    enterFn
+
+    local shortCircuitHelp shortCircuitVersion
+
+    # check for enhanced getopt
+    getopt --test
+    [ $? -ne 4 ] && fatal 'enhanced getopt unavailable'
+
+    # run getopt twice just to report fatal error and then setup parsed variable
+    # how we want
+    parsed=$(getopt --options=$APP_OPTS_SHORT \
+        --longoptions=$APP_OPTS_LONG \
+        --quiet-output \
+        -- $RUN_commandLine 2>&1)
+    [ -n "$parsed" ] && usageError "$parsed"
+    # if the above didn't generate usage error, we continue
+    parsed=$(getopt --options=$APP_OPTS_SHORT \
+        --longoptions=$APP_OPTS_LONG \
+        -- $RUN_commandLine)
+
+    # short circuit help and version
+    # read getopt’s output this way to handle the quoting right:
+    eval set -- "$parsed"
+    while true; do
+        case "$1" in
+            -h|--help)
+                shortCircuitHelp=y
+                shift
+                ;;
+            -V|--version)
+                shortCircuitVersion=y
+                shift
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                #donothing
+                shift
+                ;;
+        esac
+    done
+
+    if [ -n "$shortCircuitHelp" ]; then
+        output "$APP_USAGE"
+        terminate
+    elif [ -n "$shortCircuitVersion" ]; then
+        output "$APP_VERSION"
+        terminate
+    fi
+
+    # if we didn't terminate early via short circuit, then process commands
+    # read getopt’s output this way to handle the quoting right:
+    eval set -- "$parsed"
+    while true; do
+        case "$1" in
+            -A|--all)
+                setOption '--all'
+                shift
+                ;;
+            --clone-ghrepo)
+                setCommand 'clone-ghrepo'
+                RUN_ghSlug="$2" && debug "set RUN_ghSlug: $RUN_ghSlug"
+                shift 2
+                ;;
+            --debug)
+                #ignore, handled in preprocessCommandLine()
+                shift
+                ;;
+            --deploy-key)
+                setOption '--deploy-key'
+                RUN_deployKey="$2" && debug "set RUN_deployKey: $RUN_deployKey"
+                shift 2
+                ;;
+            -e|--edit)
+                setCommand 'edit'
+                RUN_id="$2" && debug "set RUN_id: $RUN_id"
+                shift 2
+                ;;
+            --gen-deploy-key)
+                setOption '--gen-deploy-key'
+                shift
+                ;;
+            -l|--list)
+                setCommand 'list'
+                shift
+                ;;
+            --list-repos)
+                setCommand 'list-repos'
+                shift
+                ;;
+            --list-tags)
+                setCommand 'list-tags'
+                shift
+                ;;
+            --no-color)
+                #ignore, handled in preprocessCommandLine()
+                shift
+                ;;
+            --new-lrepo)
+                setCommand 'new-lrepo'
+                shift
+                ;;
+            --nuke-repo)
+                setCommand 'nuke-repo'
+                shift
+                ;;
+            -N|--null)
+                RUN_pwd='' && debug "set RUN_pwd: $RUN_pwd"
+                shift
+                ;;
+            -R|--repo)
+                RUN_repo="$2" && debug "set RUN_repo: $RUN_repo"
+                shift 2
+                ;;
+            -T|--tag)
+                setOption '--tag'
+                RUN_tag="$2" && debug "set RUN_tag: $RUN_tag"
+                shift 2
+                ;;
+            -v)
+                RUN_verbose=$(("$RUN_verbose"+1)) && debug "set RUN_verbose: $RUN_verbose"
+                shift
+                ;;
+            --verbose)
+                if [ -z "$2" ]; then
+                    RUN_verbose=$(("$RUN_verbose"+1)) && debug "set RUN_verbose: $RUN_verbose"
+                elif [ "$2" = 0 ] || [ "$(($2))" -gt 0 ]; then
+                    RUN_verbose="$(($2))" && debug "set RUN_verbose: $RUN_verbose"
+                else
+                    usageError "did not understand verbose argument $2"
+                fi
+                shift 2
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                fatal 'internal error: unreachable cli case'
+                ;;
+        esac
+    done
+    exitFn 0
+}
+
+setCommand() {
+    enterFn "$1"
+    if [ -n "$RUN_command" ]; then
+        usageError "cannot run $RUN_command and $1 at the same time"
+    else
+        RUN_command="$1" && debug "set RUN_command: $RUN_command"
+    fi
+    exitFn 0
+}
+
+setOption() {
+    enterFn "$1"
+    if [ -n "$RUN_options" ]; then
+        RUN_options="$RUN_options "
+    fi
+    RUN_options="$RUN_options$1" && debug "set RUN_options: $RUN_options"
+    exitFn 0
+}
+
+setSedSubstitutions() {
+    enterFn
+    # escaped for variables in LHS (PATTERN) of sed
+    RUN_sed_escaped_home="$(printf '%s' "$HOME" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_home: $RUN_sed_escaped_home"
+    RUN_sed_escaped_pwd="$(printf '%s' "$RUN_pwd" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwd: $RUN_sed_escaped_pwd"
+    exitFn 0
+}
+
+changeToDataDir() {
+    enterFn
+    if ! [ -d "$RUN_dataDir" ]; then
+        verbose1 "RUN_dataDir: $RUN_dataDir does not exist, creating"
+        mkdir --parents "$RUN_dataDir" || fatal 'Could not create RUN_dataDir'
+    fi
+    cd "$RUN_dataDir" || fatal "could not change directory to RUN_dataDir: $RUN_dataDir"
+    debug "changed directory to RUN_dataDir: $RUN_dataDir"
+    exitFn 0
+}
+
+changeToRepoDir() {
+    enterFn
+    verbose1 "creating nh repo: $RUN_repo"
+    [ -d "$RUN_dataDir"/"$RUN_repo" ] || fatal "no nh repo: $RUN_repo; run --new-lrepo or --clone-ghrepo"
+    cd "$RUN_dataDir"/"$RUN_repo" || fatal "could not change directory to RUN_repo: $RUN_repo"
+    debug "changed directory to RUN_repo: $RUN_repo"
+    exitFn 0
+}
+
+checkRepoConsistency() {
+    enterFn
+
+    local gitStatus
+
+    # TODO more intellegent handling of this case
+    [ -e ./temp/* ] && fatal "File in ./temp; nh shutdown unexpectedly; please repair"
+
+    gitStatus="$(git status --porcelain=2 2>&1)" && debug "set gitStatus: $gitStatus"
+
+    if [ "${gitStatus:0:27}" = 'fatal: not a git repository' ]; then
+        fatal "not a git repo"
+    elif [ -n "$gitStatus" ]; then
+        fatal 'nh repo is in inconsistent state'
+    fi
+
+    exitFn 0
+}
+
+invokeBackgroundGitPull() {
+    enterFn
+    if [ -d .git ] && [ -f .git/config ] && grep '[remote "origin"]' .git/config >/dev/null 2>&1; then
+        verbose1 'Repo has origin; invoking background git pull'
+        nohup git pull --rebase=true --auto-stash >/dev/null 2>&1 &
+    else
+        verbose1 'Repo is local; no background git pull required'
+    fi
+    exitFn 0
+}
+
+invokeBackgroundGitPush() {
+    enterFn
+    if [ -d .git ] && [ -f .git/config ] && grep '[remote "origin"]' .git/config >/dev/null 2>&1; then
+        verbose1 'Repo has origin; invoking background git push'
+        nohup git push >/dev/null 2>&1 &
+    else
+        verbose1 'Repo is local; no background git push required'
+    fi
+    exitFn 0
+}
+
+branchOnCommand() {
+    enterFn
+    # default command
+    [ -z "$RUN_command" ] && RUN_command='new' && debug "set default RUN_command: $RUN_command"
+    verbose1 "Running command: $RUN_command"
+
+    case "$RUN_command" in
+        clone-ghrepo)
+            changeToDataDir
+            runCloneGhRepo
+            ;;
+        list-repos)
+            changeToDataDir
+            runListRepos
+            ;;
+        new-lrepo)
+            changeToDataDir
+            runNewLRepo
+            ;;
+        nuke-repo)
+            changeToRepoDir
+            runNukeRepo
+            ;;
+        edit|list|list-tags|new)
+            changeToRepoDir
+            checkRepoConsistency
+            invokeBackgroundGitPull
+            # continue with matching subsequent patterns
+            ;;&
+        edit)
+            runEdit
+            ;;
+        list)
+            runList
+            ;;
+        list-tags)
+            runListTags
+            ;;
+        new)
+            runNew
+            ;;
+        *)
+            fatal "internal error: unreachable RUN_command case: $RUN_command"
+            ;;
+    esac
+    exitFn 0
+}
+
+mainProcess() {
+    enterFn
+    checkForDependencies
+    setRunVariableDefaults
+    readConfigFile
+    readEnvironmentVariables
+    processCommandLine
+    setSedSubstitutions
+    branchOnCommand
+    exitFn 0
+}
+
+preprocessCommandLine $@
+mainProcess
+terminate
