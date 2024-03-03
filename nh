@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.13'
+APP_VERSION='nh 0.4.14'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -364,10 +364,9 @@ doPrintMeta() {
 doGitInit() {
     enterFn
     verbose1 'Initialising local git repo'
-    git init --quiet --initial-branch nh_bot
+    git init --quiet
     git config --local user.name nh_bot
     git config --local user.email nh_bot
-    printf '#nh_bot\n' >README.md && debug 'write-out to ./README.md'
     git add -A
     git commit -m 'nh_bot init local repo' >/dev/null
     exitFn 0
@@ -422,7 +421,7 @@ runCloneGhRepo() {
     if [[ "$RUN_options" = *--deploy-key* ]]; then
         [ -f "$RUN_deployKey" ] || fatal "cannot find supplied deploy key $RUN_deployKey"
         verbose1 'invoking git clone in foreground'
-        git clone "git@github.com:$RUN_ghSlug.git" --config core.sshCommand="ssh -i $RUN_deployKey" || fatal 'git clone failed'
+        git clone "git@github.com:$RUN_ghSlug.git" --config core.sshCommand="ssh -i $RUN_deployKey" --config user.name=nh_bot --config user.email=nh_bot || fatal 'git clone failed'
     elif [[ "$RUN_options" = *--gen-deploy-key* ]]; then
         RUN_id="$(uuidgen --random)" && debug "set RUN_id: $RUN_id"
         ssh-keygen -t ed25519 -C "nh gh deploy key $RUN_ghSlug" -f ~/.ssh/"$RUN_id" -N '' >/dev/null
@@ -611,13 +610,6 @@ runNukeRepo() {
             verbose1 'nuke-repo removed ./.git'
         else
             warn 'nuke-repo cannot find ./.git; repo is in unexpected state'
-        fi
-
-        if [ -e ./README.md ]; then
-            rm ./README.md || fatal 'nuke-repo failed, cannot rm ./README.md'
-            verbose1 'nuke-repo removed ./README.md'
-        else
-            warn 'nuke-repo cannot find ./README.md; repo is in unexpected state'
         fi
 
         # we expect to currently be in $repoDir so move one step higher
