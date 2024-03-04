@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.15'
+APP_VERSION='nh 0.4.16'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -430,8 +430,8 @@ selectNoteByID() {
         RUN_id="$(doReadNhftValue "$meta" 'uuid')"
         verbose1 "matched id: $RUN_id"
         [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
+        exitFn 0
     fi
-    exitFn 0
 }
 
 # run functions #
