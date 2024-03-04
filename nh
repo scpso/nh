@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.14'
+APP_VERSION='nh 0.4.15'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -45,18 +45,20 @@ Options:
     -l,     --list              list existing notes
             --list-repos        list all nh repos
             --list-tags         list all indexed tags
+    -m=ID,  --move=ID           move note from current pwd.
             --new-lrepo         initialises local nh repo
             --no-color          prevent color in output
             --nuke-repo         delete local copy of repo
     -N,     --null              null pwd
+    -P=PWD, --pwd=PWD           specifies pwd to be recorded against the note
     -R=NAME,--repo=NAME         specify which nh repo to access; if not
                                 specified the default repo will be used
     -T=TAG, --tag=TAG           use with --list; output tagged files. Implies
                                 --all
     -V,     --version           print version and exit
     -v,     --verbose[=NUM]     verbose output'
-APP_OPTS_LONG=all,clone-ghrepo:,debug,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,new-lrepo,no-color,nuke-repo,null,repo:,tag:,verbose::,version
-APP_OPTS_SHORT=Ae:hlNR:T:vV
+APP_OPTS_LONG=all,clone-ghrepo:,debug,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,verbose::,version
+APP_OPTS_SHORT=Ae:hlm:NP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
 APP_CONFIG_NAME=.nhconf.nh.md
@@ -131,7 +133,7 @@ usageError() {
     else
         printf '%susage err%s: %s\n' "$COLOR_91" "$COLOR_0" "$*" >&2
     fi
-    printf '%s\n' "$APP_USAGE"
+    printf 'run with --help to see options\n' >&2
     exit "$exitCode"
 }
 
@@ -329,7 +331,7 @@ doUpdateIndexes() {
         fi
     done
     verbose1 'Updated indexes; committing changes'
-    git add ./index_pwd* ./index_tags/* >/dev/null 2>&1
+    git add ./index_pwd ./index_pwd/**/* ./index_tags/* >/dev/null 2>&1
     git commit -m "nh_bot index $RUN_id" >/dev/null
     exitFn 0
 }
@@ -408,6 +410,30 @@ doUpdateNhftValue() {
     exitFn 0
 }
 
+# returns 0 if successfully finds matching note, else returns 1
+selectNoteByID() {
+    enterFn
+    local uuidmatches meta
+    uuidmatches=(./meta/"$RUN_id"*)
+    if [ "${#uuidmatches[@]}" -ge 2 ]; then
+        warn "Multiple notes found with id: $RUN_id*; provide more chars"
+        for filePath in "${uuidmatches[@]}"; do
+            id="$(basename "$filePath")" && debug "set id: $id"
+            output "$(doPrintMeta "$id")"
+        done
+        exitFn 1
+    elif ! [ -e "${uuidmatches[0]}" ]; then
+        warn "No note found matching id: $RUN_id*"
+        exitFn 1
+    else
+        meta="$(cat "${uuidmatches[0]}")"
+        RUN_id="$(doReadNhftValue "$meta" 'uuid')"
+        verbose1 "matched id: $RUN_id"
+        [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
+    fi
+    exitFn 0
+}
+
 # run functions #
 
 runCloneGhRepo() {
@@ -442,21 +468,7 @@ runCloneGhRepo() {
 
 runEdit() {
     enterFn
-    local matches meta
-    matches=(./meta/"$RUN_id"*)
-    if [ "${#matches[@]}" -ge 2 ]; then
-        warn "Multiple notes found with id: $RUN_id*; provide more chars"
-        for filePath in "${matches[@]}"; do
-            id="$(basename "$filePath")" && debug "set id: $id"
-            output "$(doPrintMeta "$id")"
-        done
-    elif ! [ -e "${matches[0]}" ]; then
-        fatal "No note found matching id: $RUN_id*"
-    else
-        meta="$(cat "${matches[0]}")"
-        RUN_id="$(doReadNhftValue "$meta" 'uuid')"
-        verbose1 "edit matched id: $RUN_id"
-        [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
+    if selectNoteByID; then
         doMakeTempFile
         if doEditTempFile; then
             doStoreChanges
@@ -467,6 +479,8 @@ runEdit() {
             invokeBackgroundGitPush
         fi
         doRmTempFile
+    else
+        fatal 'could not edit note'
     fi
     exitFn 0
 }
@@ -520,6 +534,22 @@ runListTags() {
     for dirPath in ./index_tags/*; do
         output "$(printf '%s%s%s\n' "$COLOR_93" "$(basename "$dirPath")" "$COLOR_0")"
     done
+    exitFn 0
+}
+
+runMove() {
+    enterFn
+    local meta
+    if selectNoteByID; then
+        doUpdateNhftValue "$(cat ./meta/"$RUN_id")" 'pwd' "$RUN_pwd" >./meta/"$RUN_id"
+        verbose1 'Note moved; committing changes'
+        git add ./meta/"$RUN_id"
+        git commit -m "nh_bot moved $RUN_id" >/dev/null
+        doUpdateIndexes
+        invokeBackgroundGitPush
+    else
+        fatal 'could not move note'
+    fi
     exitFn 0
 }
 
@@ -836,6 +866,11 @@ processCommandLine() {
                 setCommand 'list-tags'
                 shift
                 ;;
+            -m|--move)
+                setCommand 'move'
+                RUN_id="$2" && debug "set RUN_id: $RUN_id"
+                shift 2
+                ;;
             --no-color)
                 #ignore, handled in preprocessCommandLine()
                 shift
@@ -851,6 +886,14 @@ processCommandLine() {
             -N|--null)
                 RUN_pwd='' && debug "set RUN_pwd: $RUN_pwd"
                 shift
+                ;;
+            -P|--pwd)
+                if RUN_pwd="$(realpath -s "$2")"; then
+                    debug "set RUN_pwd: $RUN_pwd"
+                else
+                    fatal "$2 does not resolve to a valid dir"
+                fi
+                shift 2
                 ;;
             -R|--repo)
                 RUN_repo="$2" && debug "set RUN_repo: $RUN_repo"
@@ -999,7 +1042,7 @@ branchOnCommand() {
             changeToRepoDir
             runNukeRepo
             ;;
-        edit|list|list-tags|new)
+        edit|list|list-tags|move|new)
             changeToRepoDir
             checkRepoConsistency
             invokeBackgroundGitPull
@@ -1013,6 +1056,9 @@ branchOnCommand() {
             ;;
         list-tags)
             runListTags
+            ;;
+        move)
+            runMove
             ;;
         new)
             runNew
