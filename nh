@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.16'
+APP_VERSION='nh 0.4.17'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -35,6 +35,7 @@ Options:
                                 SLUG is username/reponame, use with
                                 --deploy-key or --gen-deploy-key
             --debug             run in debug mode
+    -d=ID,  --delete=ID         delete a note
             --deploy-key=FILE   use with --clone-ghrepo, provide path to
                                 existing ssh key to use
     -e=ID,  --edit=ID           edit existing note
@@ -57,8 +58,8 @@ Options:
                                 --all
     -V,     --version           print version and exit
     -v,     --verbose[=NUM]     verbose output'
-APP_OPTS_LONG=all,clone-ghrepo:,debug,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,verbose::,version
-APP_OPTS_SHORT=Ae:hlm:NP:R:T:vV
+APP_OPTS_LONG=all,clone-ghrepo:,debug,delete:,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,verbose::,version
+APP_OPTS_SHORT=Ad:e:hlm:NP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
 APP_CONFIG_NAME=.nhconf.nh.md
@@ -466,6 +467,33 @@ runCloneGhRepo() {
     exitFn 0
 }
 
+runDelete() {
+    enterFn
+    if selectNoteByID; then
+        find ./notes -name "$RUN_id" -delete
+        find ./tags -name "$RUN_id" -delete
+        find ./meta -name "$RUN_id" -delete
+        find ./index_pwd -name "$RUN_id" -delete
+        find ./index_tags -name "$RUN_id" -delete
+        find ./notes -empty -type d -delete
+        find ./tags -empty -type d -delete
+        find ./meta -empty -type d -delete
+        find ./index_pwd -empty -type d -delete
+        find ./index_tags -empty -type d -delete
+        verbose1 'Note deleted; committing changes'
+        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
+        # indexes may not exist, which causes fatal error for git add command
+        git add ./index_pwd/"$RUN_id" 2>/dev/null
+        git add ./index_pwd/**/"$RUN_id" 2>/dev/null
+        git add ./index_tags/**/"$RUN_id" 2>/dev/null
+        git commit -m "nh_bot delete $RUN_id"  >/dev/null
+        invokeBackgroundGitPush
+    else
+        fatal 'could not delete note'
+    fi
+    exitFn 0
+}
+
 runEdit() {
     enterFn
     if selectNoteByID; then
@@ -840,6 +868,11 @@ processCommandLine() {
                 #ignore, handled in preprocessCommandLine()
                 shift
                 ;;
+            -d|--delete)
+                setCommand 'delete'
+                RUN_id="$2" && debug "set RUN_id: $RUN_id"
+                shift 2
+                ;;
             --deploy-key)
                 setOption '--deploy-key'
                 RUN_deployKey="$2" && debug "set RUN_deployKey: $RUN_deployKey"
@@ -1042,12 +1075,15 @@ branchOnCommand() {
             changeToRepoDir
             runNukeRepo
             ;;
-        edit|list|list-tags|move|new)
+        delete|edit|list|list-tags|move|new)
             changeToRepoDir
             checkRepoConsistency
             invokeBackgroundGitPull
             # continue with matching subsequent patterns
             ;;&
+        delete)
+            runDelete
+            ;;
         edit)
             runEdit
             ;;
