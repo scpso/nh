@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.18'
+APP_VERSION='nh 0.4.19'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -166,7 +166,7 @@ fatal() {
 
 terminate() {
     local exitCode
-    exitCode=0
+    exitCode="$1"
     if [ "$RUN_debug" -ge 1 ]; then
         printf '%sterminate %sln%5s%s: %s%s%s exit: %s%s%s\n' "$COLOR_90" "$COLOR_93" "${BASH_LINENO[$callStackIndex]}" "$COLOR_0" "$COLOR_94" "${FUNCNAME[1]}" "$COLOR_0" "$COLOR_93" "$exitCode" "$COLOR_0" >&2
     fi
@@ -477,18 +477,19 @@ runCloneGhRepo() {
 
 runCat() {
     enterFn
-    if selectNoteByID; then
-        if [[ "$RUN_options" = *--meta* ]]; then
-            cat ./meta/"$RUN_id" "${RUN_passthroughArgs[@]}"
-        elif [[ "$RUN_options" = *--tags* ]]; then
-            cat ./tags/"$RUN_id" "${RUN_passthroughArgs[@]}"
-        else
-            cat ./notes/"$RUN_id" "${RUN_passthroughArgs[@]}"
-        fi
-    else
+    local catDir
+    if ! selectNoteByID; then
         fatal 'could not cat'
     fi
-    exitFn 0
+    if [[ "$RUN_options" = *--meta* ]]; then
+        catDir=meta
+    elif [[ "$RUN_options" = *--tags* ]]; then
+        catDir=tags
+    else
+        catDir=notes
+    fi
+    cat "$catDir"/"$RUN_id" "${RUN_passthroughArgs[@]}"
+    exitFn "$?"
 }
 
 runDelete() {
@@ -557,7 +558,7 @@ runGrep() {
     # collect the grep exit code, not the sed one
     result="${PIPESTATUS[0]}"
     cd .. || fatal 'internal error, unreachable failure to cd back up'
-    exitFn $result
+    exitFn "$result"
 }
 
 runList() {
@@ -726,7 +727,7 @@ runNukeRepo() {
     fi
     # force early exit here so we don't accidentally fall-through to further processing
     # now that all these dirs are deleted
-    terminate
+    terminate 0
 }
 
 # pre-cli environment checking #
@@ -890,10 +891,10 @@ processCommandLine() {
 
     if [ -n "$shortCircuitHelp" ]; then
         output "$APP_USAGE"
-        terminate
+        terminate 0
     elif [ -n "$shortCircuitVersion" ]; then
         output "$APP_VERSION"
-        terminate
+        terminate 0
     fi
 
     # if we didn't terminate early via short circuit, then process commands
@@ -1080,10 +1081,18 @@ checkRepoConsistency() {
 
     tempFiles=(./temp/*)
     if [ "${#tempFiles[@]}" -ge 2 ] || [ -e "${tempFiles[0]}" ]; then
-        fatal "File in nh repo ./temp; nh shutdown unexpectedly? please repair"
+        for tempFile in "${tempFiles[@]}"; do
+            local tempFileId
+            tempFileId="$(echo "$tempFile" | sed -re 's/.*([0-9a-f-]{36}).*/\1/')"
+            if ls -l /proc/*/fd/* 2>/dev/null | grep "$tempFileId" >/dev/null; then
+                verbose1 "found process using tempFile: $tempFileId; ignoring"
+            else
+                warn "orphaned tempfile $tempFileId found; please repair. Ignore if open in another process"
+            fi
+        done
     fi
 
-    gitStatus="$(git status --porcelain=2 2>&1)" && debug "set gitStatus: $gitStatus"
+    gitStatus="$(git status --untracked-files=no --porcelain=2 2>&1)" && debug "set gitStatus: $gitStatus"
 
     if [ "${gitStatus:0:27}" = 'fatal: not a git repository' ]; then
         fatal "not a git repo"
@@ -1175,7 +1184,7 @@ branchOnCommand() {
             esac
             ;;
     esac
-    exitFn 0
+    exitFn "$?"
 }
 
 mainProcess() {
@@ -1187,9 +1196,9 @@ mainProcess() {
     processCommandLine
     setSedSubstitutions
     branchOnCommand
-    exitFn 0
+    exitFn "$?"
 }
 
 preprocessCommandLine "$@"
 mainProcess
-terminate
+terminate "$?"
