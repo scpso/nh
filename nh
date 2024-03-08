@@ -26,11 +26,13 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.17'
+APP_VERSION='nh 0.4.18'
 APP_DEPENDENCIES=(date git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
     -A,     --all               use with --list; all pwds (including null)
+    -c=ID,  --cat=ID            output the contents of existing note to stdout;
+                                options after "--" are passed through to cat.
             --clone-ghrepo=SLUG clone an exiting nh repo hosted on github.com,
                                 SLUG is username/reponame, use with
                                 --deploy-key or --gen-deploy-key
@@ -42,10 +44,14 @@ Options:
             --gen-deploy-key    use with --clone-ghrepo, nh will generate an
                                 ssh deploy key which must be added to the repo
                                 via github.com
+    -g,     --grep              run grep across all notes; options after "--"
+                                are passed through to grep
     -h,     --help              print help and exit
     -l,     --list              list existing notes
             --list-repos        list all nh repos
             --list-tags         list all indexed tags
+            --meta              use with --cat or --grep to operate on meta
+                                instead of notes content
     -m=ID,  --move=ID           move note from current pwd.
             --new-lrepo         initialises local nh repo
             --no-color          prevent color in output
@@ -56,10 +62,12 @@ Options:
                                 specified the default repo will be used
     -T=TAG, --tag=TAG           use with --list; output tagged files. Implies
                                 --all
+            --tags              use with --cat or --grep to operate on tags
+                                instead of notes content
     -V,     --version           print version and exit
     -v,     --verbose[=NUM]     verbose output'
-APP_OPTS_LONG=all,clone-ghrepo:,debug,delete:,deploy-key:,edit:,gen-deploy-key,help,list,list-repos,list-tags,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,verbose::,version
-APP_OPTS_SHORT=Ad:e:hlm:NP:R:T:vV
+APP_OPTS_LONG=all,cat:,clone-ghrepo:,debug,delete:,deploy-key:,edit:,gen-deploy-key,grep,help,list,list-repos,list-tags,meta,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,tags,verbose::,version
+APP_OPTS_SHORT=Ac:d:e:ghlm:NP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
 APP_CONFIG_NAME=.nhconf.nh.md
@@ -346,7 +354,7 @@ doPrintMeta() {
     if [ -f ./meta/"$id" ]; then
         meta="$(cat ./meta/"$id")"
         printf '%s%s%s %s %s %s%s%s %s%s%s\n' \
-            "$COLOR_33" \
+            "$COLOR_35" \
             "${id:0:8}" \
             "$COLOR_0" \
             "$(doReadNhftValue "$meta" 'created')" \
@@ -467,6 +475,22 @@ runCloneGhRepo() {
     exitFn 0
 }
 
+runCat() {
+    enterFn
+    if selectNoteByID; then
+        if [[ "$RUN_options" = *--meta* ]]; then
+            cat ./meta/"$RUN_id" "${RUN_passthroughArgs[@]}"
+        elif [[ "$RUN_options" = *--tags* ]]; then
+            cat ./tags/"$RUN_id" "${RUN_passthroughArgs[@]}"
+        else
+            cat ./notes/"$RUN_id" "${RUN_passthroughArgs[@]}"
+        fi
+    else
+        fatal 'could not cat'
+    fi
+    exitFn 0
+}
+
 runDelete() {
     enterFn
     if selectNoteByID; then
@@ -511,6 +535,29 @@ runEdit() {
         fatal 'could not edit note'
     fi
     exitFn 0
+}
+
+runGrep() {
+    enterFn
+    local grepArgs result
+    if [[ "$RUN_options" = *--meta* ]]; then
+        cd meta || fatal 'no meta dir; have you not created any notes?'
+    elif [[ "$RUN_options" = *--tags* ]]; then
+        cd tags || fatal 'no tags dir; have you not created any notes?'
+    else
+        cd notes || fatal 'no notes dir; have you not created any notes?'
+    fi
+    if [ "$RUN_colorMode" -eq 1 ]; then
+        grepArgs=('-r' '--color=always')
+    else
+        grepArgs=('-r')
+    fi
+    # reformat the grep output so that it only shows the first 8 chars of uuid
+    grep "${grepArgs[@]}" "${RUN_passthroughArgs[@]}" | sed -E 's/^(\x1b.+)*([0-9a-f]{8})[0-9a-f-]{28}(.*$)/\1\2\3/'
+    # collect the grep exit code, not the sed one
+    result="${PIPESTATUS[0]}"
+    cd .. || fatal 'internal error, unreachable failure to cd back up'
+    exitFn $result
 }
 
 runList() {
@@ -690,8 +737,6 @@ preprocessCommandLine() {
 
     RUN_commandLine=("$@")
 
-    local colorMode
-
     # manual check for --debug option before all other processing
     # must be first to enable future debug calls
     if [[ "${RUN_commandLine[*]}" = *--debug* ]]; then
@@ -702,6 +747,7 @@ preprocessCommandLine() {
     # manual check for NO_COLOR env variable or --no-color option
     if [ -z "$NO_COLOR" ] && [[ "${RUN_commandLine[*]}" != *--no-color* ]] && tty -s; then
         COLOR_33="$(printf '\e[33m')"
+        COLOR_35="$(printf '\e[35m')"
         COLOR_93="$(printf '\e[93m')"
         COLOR_90="$(printf '\e[90m')"
         COLOR_91="$(printf '\e[91m')"
@@ -710,16 +756,16 @@ preprocessCommandLine() {
         COLOR_94="$(printf '\e[94m')"
         COLOR_95="$(printf '\e[95m')"
         COLOR_0="$(printf '\e[0m')"
-        colorMode=1
+        RUN_colorMode=1
     else
-        colorMode=0
+        RUN_colorMode=0
     fi
     # deferred entry message
     enterFn
     # deferred set message
     debug "set RUN_commandLine: ${RUN_commandLine[*]}"
-    [ "$colorMode" -gt 0 ] && debug 'running in color mode'
-    [ "$colorMode" -eq 0 ] && debug 'running in no-color mode'
+    [ "$RUN_colorMode" -gt 0 ] && debug 'running in color mode'
+    [ "$RUN_colorMode" -eq 0 ] && debug 'running in no-color mode'
     exitFn 0
 }
 
@@ -859,6 +905,11 @@ processCommandLine() {
                 setOption '--all'
                 shift
                 ;;
+            -c|--cat)
+                setCommand 'cat'
+                RUN_id="$2" && debug "set RUN_id: $RUN_id"
+                shift 2
+                ;;
             --clone-ghrepo)
                 setCommand 'clone-ghrepo'
                 RUN_ghSlug="$2" && debug "set RUN_ghSlug: $RUN_ghSlug"
@@ -887,6 +938,10 @@ processCommandLine() {
                 setOption '--gen-deploy-key'
                 shift
                 ;;
+            -g|--grep)
+                setCommand 'grep'
+                shift
+                ;;
             -l|--list)
                 setCommand 'list'
                 shift
@@ -897,6 +952,10 @@ processCommandLine() {
                 ;;
             --list-tags)
                 setCommand 'list-tags'
+                shift
+                ;;
+            --meta)
+                setOption '--meta'
                 shift
                 ;;
             -m|--move)
@@ -937,6 +996,10 @@ processCommandLine() {
                 RUN_tag="$2" && debug "set RUN_tag: $RUN_tag"
                 shift 2
                 ;;
+            --tags)
+                setOption '--tags'
+                shift
+                ;;
             -v)
                 RUN_verbose=$(("$RUN_verbose"+1)) && debug "set RUN_verbose: $RUN_verbose"
                 shift
@@ -960,6 +1023,7 @@ processCommandLine() {
                 ;;
         esac
     done
+    RUN_passthroughArgs=("$@") && verbose1 "passthrough Commands: ${RUN_passthroughArgs[*]}"
     exitFn 0
 }
 
@@ -1075,32 +1139,40 @@ branchOnCommand() {
             changeToRepoDir
             runNukeRepo
             ;;
-        delete|edit|list|list-tags|move|new)
+        *)
             changeToRepoDir
             checkRepoConsistency
             invokeBackgroundGitPull
             # continue with matching subsequent patterns
-            ;;&
-        delete)
-            runDelete
-            ;;
-        edit)
-            runEdit
-            ;;
-        list)
-            runList
-            ;;
-        list-tags)
-            runListTags
-            ;;
-        move)
-            runMove
-            ;;
-        new)
-            runNew
-            ;;
-        *)
-            fatal "internal error: unreachable RUN_command case: $RUN_command"
+            case "$RUN_command" in
+                cat)
+                    runCat
+                    ;;
+                delete)
+                    runDelete
+                    ;;
+                edit)
+                    runEdit
+                    ;;
+                grep)
+                    runGrep
+                    ;;
+                list)
+                    runList
+                    ;;
+                list-tags)
+                    runListTags
+                    ;;
+                move)
+                    runMove
+                    ;;
+                new)
+                    runNew
+                    ;;
+                *)
+                    fatal "internal error: unreachable RUN_command case: $RUN_command"
+                    ;;
+            esac
             ;;
     esac
     exitFn 0
