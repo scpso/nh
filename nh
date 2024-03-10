@@ -26,8 +26,8 @@
 
 # app consts #
 
-APP_VERSION='nh 0.4.19'
-APP_DEPENDENCIES=(date git ssh uuidgen)
+APP_VERSION='nh 0.5.0'
+APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
     -A,     --all               use with --list; all pwds (including null)
@@ -195,7 +195,7 @@ doMakeTempFile() {
         dateLocal="${dateTimeLocal:0:10}"
         meta="#### version: \`$FT_VERSION\`
 #### title: \`\`
-#### pwd: \`$RUN_pwd\`
+#### pwd: \`$RUN_pwdHomeTilde\`
 #### repo: \`$RUN_repo\`
 #### created: \`$dateLocal\`
 #### createdDTLocal: \`$dateTimeLocal\`
@@ -284,7 +284,7 @@ doStoreChanges() {
 
         local title
         title="$(printf '%s\n' "$content" | head -n 1 )"
-        [ "${#title}" -ge 51 ] && title="${title:0:49}…"
+        [ "${#title}" -ge 43 ] && title="${title:0:41}…"
         meta="$(doUpdateNhftValue "$meta" 'title' "$title")"
 
         local dateTimeUtc dateTimeLocal dateLocal
@@ -313,34 +313,54 @@ doRmTempFile() {
     exitFn 0
 }
 
+indexPwd() {
+    enterFn
+    local pwd
+    [ -f ./index_pwds ] || touch ./index_pwds || fatal 'Could not create index_pwds file'
+    sed -i "/^$RUN_id/d" ./index_pwds
+    pwd="$(doReadNhftValue "$(cat ./meta/"$RUN_id")" pwd)"
+    printf '%s %s\n' "$RUN_id" "$pwd" >>./index_pwds
+    verbose1 "indexed pwd: $pwd"
+    exitFn 0
+}
+
+indexTags() {
+    enterFn
+    local badTags goodTags
+    [ -f ./index_tags ] || touch ./index_tags || fatal 'Could not create index_tags file'
+    sed -i "/^$RUN_id/d" ./index_tags
+
+    readarray -t badTags < <(grep -E '(^_.*$|^.*[^A-Za-z0-9_].*$)' ./tags/"$RUN_id")
+    for tag in "${badTags[@]}"; do
+        [ -n "$tag" ] && warn "Tags can only use chars [A-Za-z0-9_] and must start with [A-Za-z0-9]; cannot index tag: $tag"
+    done
+
+    readarray -t goodTags < <(grep -E '^[A-Za-z0-9][A-Za-z0-9_]+$' ./tags/"$RUN_id")
+    for tag in "${goodTags[@]}"; do
+        printf '%s %s\n' "$RUN_id" "$tag" >>./index_tags
+        verbose1 "indexed tag: $tag"
+    done
+
+    exitFn 0
+}
+
+indexTitle() {
+    enterFn
+    local title
+    [ -f ./index_titles ] || touch ./index_titles || fatal 'Could not create index_titles file'
+    sed -i "/^$RUN_id/d" ./index_titles
+    title="$(doReadNhftValue "$(cat ./meta/"$RUN_id")" title)"
+    printf '%s %s\n' "$RUN_id" "$title" >>./index_titles
+    verbose1 "indexed title: $title"
+    exitFn 0
+}
+
 doUpdateIndexes() {
     enterFn
-    local meta metaPwd goodTags badTags
-    meta="$(cat ./meta/"$RUN_id")"
-    [ -d ./index_pwd ] || mkdir ./index_pwd || fatal 'Could not create index_pwd dir'
-    [ -d ./index_tags ] || mkdir ./index_tags || fatal 'Could not create index_tags dir'
-    find ./index_pwd -name "$RUN_id" -delete
-    find ./index_tags -name "$RUN_id" -delete
-    find ./index_pwd -empty -type d -delete
-    find ./index_tags -empty -type d -delete
-    metaPwd="$(doReadNhftValue "$meta" 'pwd')"
-    [ -d ./index_pwd"$metaPwd" ] || mkdir --parents ./index_pwd"$metaPwd" || fatal 'Could not create index_pwd tree'
-    touch ./index_pwd"$metaPwd"/"$RUN_id" || fatal 'Could not create index_pwd file'
-    verbose1 "indexed pwd: $metaPwd"
-    readarray -t badTags < <(grep -E '(^[_-].*$|^.*[^A-Za-z0-9_-].*$)' ./tags/"$RUN_id")
-    readarray -t goodTags < <(grep -E '^[A-Za-z0-9][A-Za-z0-9_-]+$' ./tags/"$RUN_id")
-    for tag in "${badTags[@]}"; do
-        [ -n "$tag" ] && warn "Tags can only use chars [A-Za-z0-9_-] and must start with [A-Za-z0-9]; ignoring tag: $tag"
-    done
-    for tag in "${goodTags[@]}"; do
-        if [ -n "$tag" ]; then
-            [ -d ./index_tags/"$tag" ] || mkdir --parents ./index_tags/"$tag" || fatal "Could not create index_tags dir: $tag"
-            touch ./index_tags/"$tag"/"$RUN_id" || fatal "Could not create index_tags file: ./index_tags/$tag/$RUN_id"
-            verbose1 "indexed tag: $tag"
-        fi
-    done
-    verbose1 'Updated indexes; committing changes'
-    git add ./index_pwd ./index_pwd/**/* ./index_tags/* >/dev/null 2>&1
+    indexPwd
+    indexTags
+    indexTitle
+    git add ./index_pwds ./index_tags ./index_titles
     git commit -m "nh_bot index $RUN_id" >/dev/null
     exitFn 0
 }
@@ -360,7 +380,7 @@ doPrintMeta() {
             "$(doReadNhftValue "$meta" 'created')" \
             "$(doReadNhftValue "$meta" 'modified')" \
             "$COLOR_90" \
-            "$(doReadNhftValue "$meta" 'pwd' | sed -re "s/$RUN_sed_escaped_pwd/./" -e "s/$RUN_sed_escaped_home/~/")" \
+            "$(doReadNhftValue "$meta" 'pwd' | sed -E "s/$RUN_sed_escaped_pwd/./")" \
             "$COLOR_0" \
             "$COLOR_93" \
             "$(doReadNhftValue "$meta" 'title')" \
@@ -422,23 +442,28 @@ doUpdateNhftValue() {
 # returns 0 if successfully finds matching note, else returns 1
 selectNoteByID() {
     enterFn
-    local uuidmatches meta
-    uuidmatches=(./meta/"$RUN_id"*)
-    if [ "${#uuidmatches[@]}" -ge 2 ]; then
-        warn "Multiple notes found with id: $RUN_id*; provide more chars"
-        for filePath in "${uuidmatches[@]}"; do
-            id="$(basename "$filePath")" && debug "set id: $id"
+    local matches
+    # check for matches based on title or uuid
+    [ -f ./index_titles ] && mapfile -t matches < <(sed -nE -e "s/^([0-9a-f-]{36}) $RUN_sed_escaped_id.*$/\1/p" -e "s/^($RUN_sed_escaped_id[0-9a-f-]{0,35}).*$/\1/p" ./index_titles)
+    # check we have at least one real result
+    if [ -f ./meta/"${matches[0]}" ]; then
+        debug "found title matches for $RUN_sed_escaped_id"
+    else
+        debug "no title matches for $RUN_sed_escaped_id"
+        matches=()
+    fi
+    if [ "${#matches[@]}" -ge 2 ]; then
+        warn "Multiple notes found with id: $RUN_id*; be more specific"
+        for id in "${matches[@]}"; do
             output "$(doPrintMeta "$id")"
         done
         exitFn 1
-    elif ! [ -e "${uuidmatches[0]}" ]; then
+    elif ! [ -f ./meta/"${matches[0]}" ]; then
         warn "No note found matching id: $RUN_id*"
         exitFn 1
     else
-        meta="$(cat "${uuidmatches[0]}")"
-        RUN_id="$(doReadNhftValue "$meta" 'uuid')"
+        RUN_id="${matches[0]}"
         verbose1 "matched id: $RUN_id"
-        [ "$meta" = "$(cat ./meta/"$RUN_id")" ] || fatal "Internal Error; mismatched meta for id: $RUN_id"
         exitFn 0
     fi
 }
@@ -498,19 +523,11 @@ runDelete() {
         find ./notes -name "$RUN_id" -delete
         find ./tags -name "$RUN_id" -delete
         find ./meta -name "$RUN_id" -delete
-        find ./index_pwd -name "$RUN_id" -delete
-        find ./index_tags -name "$RUN_id" -delete
-        find ./notes -empty -type d -delete
-        find ./tags -empty -type d -delete
-        find ./meta -empty -type d -delete
-        find ./index_pwd -empty -type d -delete
-        find ./index_tags -empty -type d -delete
+        [ -f ./index_pwds ] && sed -i "/^$RUN_id/d" ./index_pwds
+        [ -f ./index_tags ] && sed -i "/^$RUN_id/d" ./index_tags
+        [ -f ./index_titles ] && sed -i "/^$RUN_id/d" ./index_titles
         verbose1 'Note deleted; committing changes'
-        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
-        # indexes may not exist, which causes fatal error for git add command
-        git add ./index_pwd/"$RUN_id" 2>/dev/null
-        git add ./index_pwd/**/"$RUN_id" 2>/dev/null
-        git add ./index_tags/**/"$RUN_id" 2>/dev/null
+        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id" ./index_pwds ./index_tags ./index_titles
         git commit -m "nh_bot delete $RUN_id"  >/dev/null
         invokeBackgroundGitPush
     else
@@ -563,15 +580,17 @@ runGrep() {
 
 runList() {
     enterFn
+    local matches
     if [[ "$RUN_options" = *--tag* ]]; then
-        if [ -d ./index_tags/"$RUN_tag" ]; then
-            verbose1 "found index_tags dir: ./index_tags/$RUN_tag"
-            for filePath in ./index_tags/"$RUN_tag"/*; do
-                id="$(basename "$filePath")" && debug "set id: $id"
+        verbose1 'listing by tag'
+        [ -f ./index_tags ] && readarray -t matches < <(sed -nE "s/^([0-9a-f-]{36}) $RUN_sed_escaped_tag$/\1/p" ./index_tags)
+        # check for at least one valid result
+        if [ -f ./meta/"${matches[0]}" ]; then
+            for id in "${matches[@]}"; do
                 output "$(doPrintMeta "$id")"
             done
         else
-            verbose1 "no results for index_tags dir: ./index_tags/$RUN_tag"
+            verbose1 "no results found for tag: $RUN_tag"
         fi
     elif [[ "$RUN_options" = *--all* ]]; then
         verbose1 'listing all'
@@ -579,19 +598,18 @@ runList() {
             id="$(basename "$filePath")" && debug "set id: $id"
             output "$(doPrintMeta "$id")"
         done
-    elif [ -d ./index_pwd"$RUN_pwd" ]; then
-        verbose1 "found index_pwd dir: ./index_pwd$RUN_pwd"
-        for filePath in ./index_pwd"$RUN_pwd"/*; do
-            id="$(basename "$filePath")" && debug "set id: $id"
-            # test for valid uuid (child dirs will exist inside matching dir)
-            if printf '%s\n' "$id" | grep -E '^[0-9a-f-]{36}$' >/dev/null; then
-                output "$(doPrintMeta "$id")"
-            else
-                debug 'not a valid uuid'
-            fi
-        done
     else
-        verbose1 "no results for index_pwd dir: ./index_pwd$RUN_pwd"
+        verbose1 'listing by pwd'
+        # this will match child dirs too; this is by design but may break this in future if its too noisy in practice
+        [ -f ./index_pwds ] && readarray -t matches < <(sed -nE "s/^([0-9a-f-]{36}) $RUN_sed_escaped_pwdHomeTilde.*$/\1/p" ./index_pwds)
+        # check for at least one valid result
+        if [ -f ./meta/"${matches[0]}" ]; then
+            for id in "${matches[@]}"; do
+                output "$(doPrintMeta "$id")"
+            done
+        else
+            verbose1 "no results found for pwd: $RUN_pwd"
+        fi
     fi
     exitFn 0
 }
@@ -607,8 +625,10 @@ runListRepos() {
 
 runListTags() {
     enterFn
-    for dirPath in ./index_tags/*; do
-        output "$(printf '%s%s%s\n' "$COLOR_93" "$(basename "$dirPath")" "$COLOR_0")"
+    local matches
+    [ -f ./index_tags ] && readarray -t matches < <(sed -nE "s/^[0-9a-f-]{36} (.*)$/\1/p" ./index_tags | sort -u)
+    for tag in "${matches[@]}"; do
+        output "$(printf '%s%s%s\n' "$COLOR_93" "$tag" "$COLOR_0")"
     done
     exitFn 0
 }
@@ -617,7 +637,8 @@ runMove() {
     enterFn
     local meta
     if selectNoteByID; then
-        doUpdateNhftValue "$(cat ./meta/"$RUN_id")" 'pwd' "$RUN_pwd" >./meta/"$RUN_id"
+        meta="$(cat ./meta/"$RUN_id")"
+        doUpdateNhftValue "$meta" 'pwd' "$RUN_pwdHomeTilde" >./meta/"$RUN_id"
         verbose1 'Note moved; committing changes'
         git add ./meta/"$RUN_id"
         git commit -m "nh_bot moved $RUN_id" >/dev/null
@@ -667,6 +688,7 @@ runNukeRepo() {
     repoDir="$RUN_dataDir"/"$RUN_repo"
 
     if [ -n "$repoDir" ] && [ -d "$repoDir" ]; then
+        # sanity check before we start nuking data
         if [ "$repoDir" != "$PWD" ]; then
             fatal "cannot nuke-repo, nh is not running in repoDir: $repoDir"
         else
@@ -675,38 +697,30 @@ runNukeRepo() {
         if [ -d ./notes ]; then
             rm -r ./notes || fatal 'nuke-repo failed, cannot rm ./notes'
             verbose1 'nuke-repo removed ./notes'
-        else
-            warn 'nuke-repo cannot find ./notes; repo is in unexpected state'
         fi
         if [ -d ./tags ]; then
             rm -r ./tags || fatal 'nuke-repo failed, cannot rm ./tags'
             verbose1 'nuke-repo removed ./tags'
-        else
-            warn 'nuke-repo cannot find ./tags; repo is in unexpected state'
         fi
         if [ -d ./meta ]; then
             rm -r ./meta || fatal 'nuke-repo failed, cannot rm ./meta'
             verbose1 'nuke-repo removed ./meta'
-        else
-            warn 'nuke-repo cannot find ./meta; repo is in unexpected state'
         fi
-        if [ -d ./index_pwd ]; then
-            rm -r ./index_pwd || fatal 'nuke-repo failed, cannot rm ./index_pwd'
-            verbose1 'nuke-repo removed ./index_pwd'
-        else
-            warn 'nuke-repo cannot find ./index_pwd; repo is in unexpected state'
+        if [ -f ./index_pwds ]; then
+            rm ./index_pwds || fatal 'nuke-repo failed, cannot rm ./index_pwds'
+            verbose1 'nuke-repo removed ./index_pwds'
         fi
-        if [ -d ./index_tags ]; then
-            rm -r ./index_tags || fatal 'nuke-repo failed, cannot rm ./index_tags'
+        if [ -f ./index_tags ]; then
+            rm ./index_tags || fatal 'nuke-repo failed, cannot rm ./index_tags'
             verbose1 'nuke-repo removed ./index_tags'
-        else
-            warn 'nuke-repo cannot find ./index_tags; repo is in unexpected state'
+        fi
+        if [ -f ./index_titles ]; then
+            rm ./index_titles || fatal 'nuke-repo failed, cannot rm ./index_titles'
+            verbose1 'nuke-repo removed ./index_titles'
         fi
         if [ -d ./temp ]; then
             rm -r ./temp || fatal 'nuke-repo failed, cannot rm ./temp'
             verbose1 'nuke-repo removed ./temp'
-        else
-            warn 'nuke-repo cannot find ./temp; repo is in unexpected state'
         fi
 
         # I don't like this but I don't know of a git command to achieve it
@@ -723,7 +737,7 @@ runNukeRepo() {
         rmdir "$repoDir" || fatal "nuke-repo failed, cannot rm repoDir: $repoDir"
         verbose1 "nuke-repo removed repoDir: $repoDir"
     else
-        warn "nothing to nuke-repo: could not find repoDir: $repoDir"
+        fatal "nothing to nuke-repo: could not find repoDir: $repoDir"
     fi
     # force early exit here so we don't accidentally fall-through to further processing
     # now that all these dirs are deleted
@@ -767,14 +781,6 @@ preprocessCommandLine() {
     debug "set RUN_commandLine: ${RUN_commandLine[*]}"
     [ "$RUN_colorMode" -gt 0 ] && debug 'running in color mode'
     [ "$RUN_colorMode" -eq 0 ] && debug 'running in no-color mode'
-    exitFn 0
-}
-
-checkForDependencies() {
-    enterFn
-    for dep in "${APP_DEPENDENCIES[@]}"; do
-        ! command -v "$dep" 1>/dev/null && fatal "dependency $dep unavailable"
-    done
     exitFn 0
 }
 
@@ -1047,11 +1053,24 @@ setOption() {
     exitFn 0
 }
 
+checkForDependencies() {
+    enterFn
+    for dep in "${APP_DEPENDENCIES[@]}"; do
+        ! command -v "$dep" 1>/dev/null && fatal "dependency $dep unavailable"
+    done
+    exitFn 0
+}
+
+
 setSedSubstitutions() {
     enterFn
     # escaped for variables in LHS (PATTERN) of sed
     RUN_sed_escaped_home="$(printf '%s' "$HOME" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_home: $RUN_sed_escaped_home"
     RUN_sed_escaped_pwd="$(printf '%s' "$RUN_pwd" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwd: $RUN_sed_escaped_pwd"
+    RUN_sed_escaped_id="$(printf '%s' "$RUN_id" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_id: $RUN_sed_escaped_id"
+    RUN_sed_escaped_tag="$(printf '%s' "$RUN_tag" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_tag: $RUN_sed_escaped_tag"
+    RUN_pwdHomeTilde="$(printf '%s\n' "$RUN_pwd" | sed -E "s/^$RUN_sed_escaped_home/~/")" && debug "set RUN_pwdHomeTilde: $RUN_pwdHomeTilde"
+    RUN_sed_escaped_pwdHomeTilde="$(printf '%s' "$RUN_pwdHomeTilde" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwdHomeTilde: $RUN_sed_escaped_pwdHomeTilde"
     exitFn 0
 }
 
@@ -1189,11 +1208,11 @@ branchOnCommand() {
 
 mainProcess() {
     enterFn
-    checkForDependencies
     setRunVariableDefaults
     readConfigFile
     readEnvironmentVariables
     processCommandLine
+    checkForDependencies
     setSedSubstitutions
     branchOnCommand
     exitFn "$?"

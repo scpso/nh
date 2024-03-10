@@ -28,3 +28,45 @@ perspective this is acceptable.
 
 This is entirely a personal project and I may extend or change or otherwise
 break it…
+
+## Install
+
+The file nh in the root of the repo is the only required file for full
+operation. As such the easiest way to install the latest version is:
+
+    cd ~/somewhere/in/your/path # e.g. ~/bin
+    curl https://raw.githubusercontent.com/scpso/nh/main/nh >nh
+    chmod 744 nh
+
+You can verify it's working correctly with:
+
+    nh --version
+
+Before you can start storing notes you'll need to initialise a repo. For just
+trying nh out a local repo is best:
+
+    nh --new-lrepo
+
+nh will read the $EDITOR environment variable to choose a text editor to run,
+falling back to nano if $EDITOR is not set. It's not required, but if you want
+to you can set this permanently (with, for example, vim as your preferred
+editor):
+
+    printf 'EDITOR=vim\nexport EDITOR\n' >>~/.bashrc
+
+To write a new note, just run nh with no other commands:
+
+    nh
+
+To list existing notes:
+
+    nh --list --all
+
+to edit an existing note, you can specify it with the first few characters of
+the note's id or its title (both of which are displayed by the --list command:
+
+    nh --edit mynote
+
+Check the help for more commands:
+
+    nh --help
