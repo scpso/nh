@@ -1,6 +1,13 @@
+# 0.5.1
+
+## Bugfixes
+
+* correct the syntax described by --help
+* search for correct nhconf file
+
 # 0.5.0
 
-## breaking changes
+## Breaking Changes
 
 no migration is provided; updating existing nh repos to be compatible with
 0.5.0 needs to be done manually
@@ -8,11 +15,11 @@ no migration is provided; updating existing nh repos to be compatible with
 * change format of pwd and tags indexes; this affects most functions.
 * store pwds with ~ substitution for $HOME
 
-## new features
+## New Features
 
 * index titles; commands that select existing notes like --edit and --cat can
   now select based on uuid or title
 
-## bugfixes
+## Bugfixes
 
 * shortcircuit commands --help and --version now bypass dependency checks
