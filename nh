@@ -26,21 +26,21 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.0'
+APP_VERSION='nh 0.5.1'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
     -A,     --all               use with --list; all pwds (including null)
-    -c=ID,  --cat=ID            output the contents of existing note to stdout;
+    -c ID,  --cat ID            output the contents of existing note to stdout;
                                 options after "--" are passed through to cat.
-            --clone-ghrepo=SLUG clone an exiting nh repo hosted on github.com,
+            --clone-ghrepo SLUG clone an exiting nh repo hosted on github.com,
                                 SLUG is username/reponame, use with
                                 --deploy-key or --gen-deploy-key
             --debug             run in debug mode
-    -d=ID,  --delete=ID         delete a note
-            --deploy-key=FILE   use with --clone-ghrepo, provide path to
+    -d ID,  --delete ID         delete a note
+            --deploy-key FILE   use with --clone-ghrepo, provide path to
                                 existing ssh key to use
-    -e=ID,  --edit=ID           edit existing note
+    -e ID,  --edit ID           edit existing note
             --gen-deploy-key    use with --clone-ghrepo, nh will generate an
                                 ssh deploy key which must be added to the repo
                                 via github.com
@@ -52,25 +52,25 @@ Options:
             --list-tags         list all indexed tags
             --meta              use with --cat or --grep to operate on meta
                                 instead of notes content
-    -m=ID,  --move=ID           move note from current pwd.
+    -m ID,  --move ID           move note from current pwd.
             --new-lrepo         initialises local nh repo
             --no-color          prevent color in output
             --nuke-repo         delete local copy of repo
     -N,     --null              null pwd
-    -P=PWD, --pwd=PWD           specifies pwd to be recorded against the note
-    -R=NAME,--repo=NAME         specify which nh repo to access; if not
+    -P PWD, --pwd PWD           specifies pwd to be recorded against the note
+    -R NAME,--repo NAME         specify which nh repo to access; if not
                                 specified the default repo will be used
-    -T=TAG, --tag=TAG           use with --list; output tagged files. Implies
+    -T TAG, --tag TAG           use with --list; output tagged files. Implies
                                 --all
             --tags              use with --cat or --grep to operate on tags
                                 instead of notes content
     -V,     --version           print version and exit
-    -v,     --verbose[=NUM]     verbose output'
+    -v,     --verbose [NUM]     verbose output'
 APP_OPTS_LONG=all,cat:,clone-ghrepo:,debug,delete:,deploy-key:,edit:,gen-deploy-key,grep,help,list,list-repos,list-tags,meta,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,tags,verbose::,version
 APP_OPTS_SHORT=Ac:d:e:ghlm:NP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
-APP_CONFIG_NAME=.nhconf.nh.md
+APP_CONFIG_NAME=nhconf.nh.md
 
 # filetype consts #
 
