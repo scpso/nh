@@ -1,3 +1,8 @@
+# 0.5.2
+
+## Performance Improvement
+* `--list` command now runs ~5x times faster
+
 # 0.5.1
 
 ## Bugfixes

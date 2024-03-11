@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.1'
+APP_VERSION='nh 0.5.2'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -368,23 +368,11 @@ doUpdateIndexes() {
 # returns 0 if successfully finds and prints meta, else returns 1
 doPrintMeta() {
     enterFn "$1"
-    local id meta
+    local id
     id="$1"
     [ -n "$id" ] || fatal 'Internal error: doPrintMeta() called with no argument'
     if [ -f ./meta/"$id" ]; then
-        meta="$(cat ./meta/"$id")"
-        printf '%s%s%s %s %s %s%s%s %s%s%s\n' \
-            "$COLOR_35" \
-            "${id:0:8}" \
-            "$COLOR_0" \
-            "$(doReadNhftValue "$meta" 'created')" \
-            "$(doReadNhftValue "$meta" 'modified')" \
-            "$COLOR_90" \
-            "$(doReadNhftValue "$meta" 'pwd' | sed -E "s/$RUN_sed_escaped_pwd/./")" \
-            "$COLOR_0" \
-            "$COLOR_93" \
-            "$(doReadNhftValue "$meta" 'title')" \
-            "$COLOR_0"
+        sed -nE "$RUN_sedPrintMetaExpression" ./meta/"$id"
         exitFn 0
     else
         warn "Internal error or inconsistent repo; could not find ./meta/$id"
@@ -1061,9 +1049,9 @@ checkForDependencies() {
     exitFn 0
 }
 
-
 setSedSubstitutions() {
     enterFn
+    local sedLHS sedRHS
     # escaped for variables in LHS (PATTERN) of sed
     RUN_sed_escaped_home="$(printf '%s' "$HOME" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_home: $RUN_sed_escaped_home"
     RUN_sed_escaped_pwd="$(printf '%s' "$RUN_pwd" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwd: $RUN_sed_escaped_pwd"
@@ -1071,6 +1059,17 @@ setSedSubstitutions() {
     RUN_sed_escaped_tag="$(printf '%s' "$RUN_tag" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_tag: $RUN_sed_escaped_tag"
     RUN_pwdHomeTilde="$(printf '%s\n' "$RUN_pwd" | sed -E "s/^$RUN_sed_escaped_home/~/")" && debug "set RUN_pwdHomeTilde: $RUN_pwdHomeTilde"
     RUN_sed_escaped_pwdHomeTilde="$(printf '%s' "$RUN_pwdHomeTilde" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwdHomeTilde: $RUN_sed_escaped_pwdHomeTilde"
+
+    # print meta expression; construct once for fast reuse #
+
+    # only operate on v0.2.0 that we can rely on matching this format
+    # \1==title \2==pwd \3==created \4==modified \5==uuid
+    sedLHS='^.*version: `nhft 0.2.0`.*title: `(.*)`.*pwd: `(.*)`.*repo.*created: `([0-9-]+)`.*modified: `([0-9-]+)`.*uuid: `(.{8}).*`.*$'
+    # order: id, created, modified, pwd, title
+    sedRHS="$COLOR_35\\5 $COLOR_0\\3 \\4 $COLOR_90\\2 $COLOR_93\\1$COLOR_0"
+    # combine all lines into a single hold space before doing the
+    # substitution in one go; see https://stackoverflow.com/questions/37994626
+    RUN_sedPrintMetaExpression="$(printf '1h;2,$H;${g;s/%s/%s/g;p}' "$sedLHS" "$sedRHS")"
     exitFn 0
 }
 
