@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.2'
+APP_VERSION='nh 0.5.3'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -1051,7 +1051,7 @@ checkForDependencies() {
 
 setSedSubstitutions() {
     enterFn
-    local sedLHS sedRHS
+    local sedLHS sedRHS sedToday sedRecent
     # escaped for variables in LHS (PATTERN) of sed
     RUN_sed_escaped_home="$(printf '%s' "$HOME" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_home: $RUN_sed_escaped_home"
     RUN_sed_escaped_pwd="$(printf '%s' "$RUN_pwd" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwd: $RUN_sed_escaped_pwd"
@@ -1066,10 +1066,22 @@ setSedSubstitutions() {
     # \1==title \2==pwd \3==created \4==modified \5==uuid
     sedLHS='^.*version: `nhft 0.2.0`.*title: `(.*)`.*pwd: `(.*)`.*repo.*created: `([0-9-]+)`.*modified: `([0-9-]+)`.*uuid: `(.{8}).*`.*$'
     # order: id, created, modified, pwd, title
-    sedRHS="$COLOR_35\\5 $COLOR_0\\3 \\4 $COLOR_90\\2 $COLOR_93\\1$COLOR_0"
+    # insert }!}! as control sequence for date coloring per recency
+    sedRHS="$COLOR_35\\5 }!}!\\3 }!}!\\4 $COLOR_90\\2 $COLOR_93\\1$COLOR_0"
+
+    # date for regex capture group
+    sedToday="$(date --iso-8601)"
+    # a|b|c|… with past 30 days for regex capture group
+    sedRecent="$(date --iso-8601 -d -1day)"
+    for i in $(seq -2 -1 -30); do
+        sedRecent="$sedRecent|$(date --iso-8601 -d ${i}day)"
+    done
+
     # combine all lines into a single hold space before doing the
     # substitution in one go; see https://stackoverflow.com/questions/37994626
-    RUN_sedPrintMetaExpression="$(printf '1h;2,$H;${g;s/%s/%s/g;p}' "$sedLHS" "$sedRHS")"
+    # then replace the }!}! control sequences with green for today, normal for
+    # past 30 days and grey for all other (older) dates
+    RUN_sedPrintMetaExpression="$(printf '1h;2,$H;${g;s/%s/%s/g;s/}!}!(%s)/%s\\1/g;s/}!}!(%s)/%s\\1/g;s/}!}!/%s/g;p}' "$sedLHS" "$sedRHS" "$sedToday" "$COLOR_92" "$sedRecent" "$COLOR_0" "$COLOR_90")"
     exitFn 0
 }
 

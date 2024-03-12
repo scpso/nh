@@ -1,3 +1,10 @@
+# 0.5.3
+
+## New Features
+
+* `--list` will colorise dates on recency; today=green, last 30 days=white,
+  all other dates=grey
+
 # 0.5.2
 
 ## Performance Improvement
