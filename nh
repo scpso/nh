@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.3'
+APP_VERSION='nh 0.5.4'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -1071,16 +1071,16 @@ setSedSubstitutions() {
 
     # date for regex capture group
     sedToday="$(date --iso-8601)"
-    # a|b|c|… with past 30 days for regex capture group
+    # a|b|c|… with past 7 days for regex capture group
     sedRecent="$(date --iso-8601 -d -1day)"
-    for i in $(seq -2 -1 -30); do
+    for i in $(seq -2 -1 -7); do
         sedRecent="$sedRecent|$(date --iso-8601 -d ${i}day)"
     done
 
     # combine all lines into a single hold space before doing the
     # substitution in one go; see https://stackoverflow.com/questions/37994626
     # then replace the }!}! control sequences with green for today, normal for
-    # past 30 days and grey for all other (older) dates
+    # past 7 days and grey for all other (older) dates
     RUN_sedPrintMetaExpression="$(printf '1h;2,$H;${g;s/%s/%s/g;s/}!}!(%s)/%s\\1/g;s/}!}!(%s)/%s\\1/g;s/}!}!/%s/g;p}' "$sedLHS" "$sedRHS" "$sedToday" "$COLOR_92" "$sedRecent" "$COLOR_0" "$COLOR_90")"
     exitFn 0
 }

@@ -1,3 +1,11 @@
+# 0.5.4
+
+## New Features
+
+* `--list` colorisation of last 30 days turns out to be noisy in use, have
+  changed to 7 days to make it more useful for quickly finding recent notes. So
+  now color scheme is today=green, last 7 days=white, all other dates=grey
+
 # 0.5.3
 
 ## New Features
