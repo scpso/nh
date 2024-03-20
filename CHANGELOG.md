@@ -1,3 +1,10 @@
+# 0.5.5
+
+## New Features
+
+* new commands `--data-dir` and `--repo-dir` to print the currently-configured
+  dirs to stdout
+
 # 0.5.4
 
 ## New Features

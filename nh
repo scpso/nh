@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.4'
+APP_VERSION='nh 0.5.5'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 Options:
@@ -36,6 +36,7 @@ Options:
             --clone-ghrepo SLUG clone an exiting nh repo hosted on github.com,
                                 SLUG is username/reponame, use with
                                 --deploy-key or --gen-deploy-key
+            --data-dir          prints the currently configured data dir
             --debug             run in debug mode
     -d ID,  --delete ID         delete a note
             --deploy-key FILE   use with --clone-ghrepo, provide path to
@@ -60,13 +61,14 @@ Options:
     -P PWD, --pwd PWD           specifies pwd to be recorded against the note
     -R NAME,--repo NAME         specify which nh repo to access; if not
                                 specified the default repo will be used
+            --repo-dir          prints the currently configured repo dir
     -T TAG, --tag TAG           use with --list; output tagged files. Implies
                                 --all
             --tags              use with --cat or --grep to operate on tags
                                 instead of notes content
     -V,     --version           print version and exit
     -v,     --verbose [NUM]     verbose output'
-APP_OPTS_LONG=all,cat:,clone-ghrepo:,debug,delete:,deploy-key:,edit:,gen-deploy-key,grep,help,list,list-repos,list-tags,meta,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,tag:,tags,verbose::,version
+APP_OPTS_LONG=all,cat:,clone-ghrepo:,data-dir,debug,delete:,deploy-key:,edit:,gen-deploy-key,grep,help,list,list-repos,list-tags,meta,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,repo-dir,tag:,tags,verbose::,version
 APP_OPTS_SHORT=Ac:d:e:ghlm:NP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
@@ -505,6 +507,12 @@ runCat() {
     exitFn "$?"
 }
 
+runDataDir() {
+    enterFn
+    output "$RUN_dataDir"
+    exitFn 0
+}
+
 runDelete() {
     enterFn
     if selectNoteByID; then
@@ -732,6 +740,12 @@ runNukeRepo() {
     terminate 0
 }
 
+runRepoDir() {
+    enterFn
+    output "$RUN_dataDir/$RUN_repo"
+    exitFn 0
+}
+
 # pre-cli environment checking #
 
 preprocessCommandLine() {
@@ -910,6 +924,10 @@ processCommandLine() {
                 RUN_ghSlug="$2" && debug "set RUN_ghSlug: $RUN_ghSlug"
                 shift 2
                 ;;
+            --data-dir)
+                setCommand 'data-dir'
+                shift
+                ;;
             --debug)
                 #ignore, handled in preprocessCommandLine()
                 shift
@@ -985,6 +1003,10 @@ processCommandLine() {
             -R|--repo)
                 RUN_repo="$2" && debug "set RUN_repo: $RUN_repo"
                 shift 2
+                ;;
+            --repo-dir)
+                setCommand 'repo-dir'
+                shift
                 ;;
             -T|--tag)
                 setOption '--tag'
@@ -1187,6 +1209,9 @@ branchOnCommand() {
                 cat)
                     runCat
                     ;;
+                data-dir)
+                    runDataDir
+                    ;;
                 delete)
                     runDelete
                     ;;
@@ -1207,6 +1232,9 @@ branchOnCommand() {
                     ;;
                 new)
                     runNew
+                    ;;
+                repo-dir)
+                    runRepoDir
                     ;;
                 *)
                     fatal "internal error: unreachable RUN_command case: $RUN_command"
