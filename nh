@@ -26,26 +26,32 @@
 
 # app consts #
 
-APP_VERSION='nh 0.5.5'
+APP_VERSION='nh 0.6.0'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
+
+    nh [options] [QUERY (ie leftmost chars of note id or title, spaces ok)]
+
 Options:
     -A,     --all               use with --list; all pwds (including null)
-    -c ID,  --cat ID            output the contents of existing note to stdout;
-                                options after "--" are passed through to cat.
+    -c,     --cat               output the contents of existing note to stdout;
+                                arguments after "--" are passed through to cat.
+                                Requires QUERY.
             --clone-ghrepo SLUG clone an exiting nh repo hosted on github.com,
                                 SLUG is username/reponame, use with
                                 --deploy-key or --gen-deploy-key
             --data-dir          prints the currently configured data dir
             --debug             run in debug mode
-    -d ID,  --delete ID         delete a note
+    -d,     --delete            delete a note. Requires QUERY.
             --deploy-key FILE   use with --clone-ghrepo, provide path to
                                 existing ssh key to use
-    -e ID,  --edit ID           edit existing note
+    -e,     --edit              edit existing note. Requires QUERY.
             --gen-deploy-key    use with --clone-ghrepo, nh will generate an
                                 ssh deploy key which must be added to the repo
                                 via github.com
-    -g,     --grep              run grep across all notes; options after "--"
+            --git               run git in the repo dir; arguments after "--"
+                                are passed through to git
+    -g,     --grep              run grep across all notes; arguments after "--"
                                 are passed through to grep
     -h,     --help              print help and exit
     -l,     --list              list existing notes
@@ -53,7 +59,7 @@ Options:
             --list-tags         list all indexed tags
             --meta              use with --cat or --grep to operate on meta
                                 instead of notes content
-    -m ID,  --move ID           move note from current pwd.
+    -m,     --move              move note from current pwd. Requires QUERY.
             --new-lrepo         initialises local nh repo
             --no-color          prevent color in output
             --nuke-repo         delete local copy of repo
@@ -68,8 +74,8 @@ Options:
                                 instead of notes content
     -V,     --version           print version and exit
     -v,     --verbose [NUM]     verbose output'
-APP_OPTS_LONG=all,cat:,clone-ghrepo:,data-dir,debug,delete:,deploy-key:,edit:,gen-deploy-key,grep,help,list,list-repos,list-tags,meta,move:,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,repo-dir,tag:,tags,verbose::,version
-APP_OPTS_SHORT=Ac:d:e:ghlm:NP:R:T:vV
+APP_OPTS_LONG=all,cat,clone-ghrepo:,data-dir,debug,delete,deploy-key:,edit,gen-deploy-key,git,grep,help,list,list-repos,list-tags,meta,move,new-lrepo,no-color,nuke-repo,null,pwd:,repo:,repo-dir,tag:,tags,verbose::,version
+APP_OPTS_SHORT=AcdeghlmNP:R:T:vV
 APP_DIR_NAME=nh
 APP_DEFAULT_REPO=default
 APP_CONFIG_NAME=nhconf.nh.md
@@ -430,30 +436,24 @@ doUpdateNhftValue() {
 }
 
 # returns 0 if successfully finds matching note, else returns 1
-selectNoteByID() {
+queryNote() {
     enterFn
     local matches
     # check for matches based on title or uuid
-    [ -f ./index_titles ] && mapfile -t matches < <(sed -nE -e "s/^([0-9a-f-]{36}) $RUN_sed_escaped_id.*$/\1/p" -e "s/^($RUN_sed_escaped_id[0-9a-f-]{0,35}).*$/\1/p" ./index_titles)
+    [ -f ./index_titles ] && mapfile -t matches < <(sed -nE -e "s/^([0-9a-f-]{36}) $RUN_sedEscQuery.*$/\1/p" -e "s/^($RUN_sedEscQuery[0-9a-f-]{0,35}).*$/\1/p" ./index_titles)
     # check we have at least one real result
-    if [ -f ./meta/"${matches[0]}" ]; then
-        debug "found title matches for $RUN_sed_escaped_id"
-    else
-        debug "no title matches for $RUN_sed_escaped_id"
-        matches=()
-    fi
     if [ "${#matches[@]}" -ge 2 ]; then
-        warn "Multiple notes found with id: $RUN_id*; be more specific"
+        warn "Multiple notes found matching: $RUN_query*; be more specific"
         for id in "${matches[@]}"; do
             output "$(doPrintMeta "$id")"
         done
         exitFn 1
     elif ! [ -f ./meta/"${matches[0]}" ]; then
-        warn "No note found matching id: $RUN_id*"
+        warn "No note found matching: $RUN_query*"
         exitFn 1
     else
         RUN_id="${matches[0]}"
-        verbose1 "matched id: $RUN_id"
+        verbose1 "Matched note: $RUN_id"
         exitFn 0
     fi
 }
@@ -493,9 +493,6 @@ runCloneGhRepo() {
 runCat() {
     enterFn
     local catDir
-    if ! selectNoteByID; then
-        fatal 'could not cat'
-    fi
     if [[ "$RUN_options" = *--meta* ]]; then
         catDir=meta
     elif [[ "$RUN_options" = *--tags* ]]; then
@@ -503,7 +500,7 @@ runCat() {
     else
         catDir=notes
     fi
-    cat "$catDir"/"$RUN_id" "${RUN_passthroughArgs[@]}"
+    cat "$catDir"/"$RUN_id" "${RUN_passthroughCommandLine[@]}"
     exitFn "$?"
 }
 
@@ -515,40 +512,38 @@ runDataDir() {
 
 runDelete() {
     enterFn
-    if selectNoteByID; then
-        find ./notes -name "$RUN_id" -delete
-        find ./tags -name "$RUN_id" -delete
-        find ./meta -name "$RUN_id" -delete
-        [ -f ./index_pwds ] && sed -i "/^$RUN_id/d" ./index_pwds
-        [ -f ./index_tags ] && sed -i "/^$RUN_id/d" ./index_tags
-        [ -f ./index_titles ] && sed -i "/^$RUN_id/d" ./index_titles
-        verbose1 'Note deleted; committing changes'
-        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id" ./index_pwds ./index_tags ./index_titles
-        git commit -m "nh_bot delete $RUN_id"  >/dev/null
-        invokeBackgroundGitPush
-    else
-        fatal 'could not delete note'
-    fi
+    find ./notes -name "$RUN_id" -delete
+    find ./tags -name "$RUN_id" -delete
+    find ./meta -name "$RUN_id" -delete
+    [ -f ./index_pwds ] && sed -i "/^$RUN_id/d" ./index_pwds
+    [ -f ./index_tags ] && sed -i "/^$RUN_id/d" ./index_tags
+    [ -f ./index_titles ] && sed -i "/^$RUN_id/d" ./index_titles
+    verbose1 'Note deleted; committing changes'
+    git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id" ./index_pwds ./index_tags ./index_titles
+    git commit -m "nh_bot delete $RUN_id"  >/dev/null
+    invokeBackgroundGitPush
     exitFn 0
 }
 
 runEdit() {
     enterFn
-    if selectNoteByID; then
-        doMakeTempFile
-        if doEditTempFile; then
-            doStoreChanges
-            verbose1 'Note updated; committing changes'
-            git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
-            git commit -m "nh_bot update $RUN_id"  >/dev/null
-            doUpdateIndexes
-            invokeBackgroundGitPush
-        fi
-        doRmTempFile
-    else
-        fatal 'could not edit note'
+    doMakeTempFile
+    if doEditTempFile; then
+        doStoreChanges
+        verbose1 'Note updated; committing changes'
+        git add ./notes/"$RUN_id" ./tags/"$RUN_id" ./meta/"$RUN_id"
+        git commit -m "nh_bot update $RUN_id"  >/dev/null
+        doUpdateIndexes
+        invokeBackgroundGitPush
     fi
+    doRmTempFile
     exitFn 0
+}
+
+runGit() {
+    enterFn
+    git "${RUN_passthroughCommandLine[@]}"
+    exitFn "$?"
 }
 
 runGrep() {
@@ -567,7 +562,7 @@ runGrep() {
         grepArgs=('-r')
     fi
     # reformat the grep output so that it only shows the first 8 chars of uuid
-    grep "${grepArgs[@]}" "${RUN_passthroughArgs[@]}" | sed -E 's/^(\x1b.+)*([0-9a-f]{8})[0-9a-f-]{28}(.*$)/\1\2\3/'
+    grep "${grepArgs[@]}" "${RUN_passthroughCommandLine[@]}" | sed -E 's/^(\x1b.+)*([0-9a-f]{8})[0-9a-f-]{28}(.*$)/\1\2\3/'
     # collect the grep exit code, not the sed one
     result="${PIPESTATUS[0]}"
     cd .. || fatal 'internal error, unreachable failure to cd back up'
@@ -632,17 +627,13 @@ runListTags() {
 runMove() {
     enterFn
     local meta
-    if selectNoteByID; then
-        meta="$(cat ./meta/"$RUN_id")"
-        doUpdateNhftValue "$meta" 'pwd' "$RUN_pwdHomeTilde" >./meta/"$RUN_id"
-        verbose1 'Note moved; committing changes'
-        git add ./meta/"$RUN_id"
-        git commit -m "nh_bot moved $RUN_id" >/dev/null
-        doUpdateIndexes
-        invokeBackgroundGitPush
-    else
-        fatal 'could not move note'
-    fi
+    meta="$(cat ./meta/"$RUN_id")"
+    doUpdateNhftValue "$meta" 'pwd' "$RUN_pwdHomeTilde" >./meta/"$RUN_id"
+    verbose1 'Note moved; committing changes'
+    git add ./meta/"$RUN_id"
+    git commit -m "nh_bot moved $RUN_id" >/dev/null
+    doUpdateIndexes
+    invokeBackgroundGitPush
     exitFn 0
 }
 
@@ -855,27 +846,49 @@ readEnvironmentVariables() {
 processCommandLine() {
     enterFn
 
-    local shortCircuitHelp shortCircuitVersion
+    local i commandLine passthrough error parsedCommandLine shortCircuitHelp shortCircuitVersion
 
     # check for enhanced getopt
     getopt --test
     [ $? -ne 4 ] && fatal 'enhanced getopt unavailable'
 
-    # run getopt twice just to report usage error and then setup parsed variable
-    # how we want
-    parsed=$(getopt --options=$APP_OPTS_SHORT \
+    i=0
+    passthrough=0
+    commandLine=()
+    RUN_passthroughCommandLine=()
+    # split commands at -- to passthrough
+    for arg in "${RUN_commandLine[@]}"; do
+        if [ "$passthrough" -eq 0 ]; then
+            if [ "$arg" = '--' ]; then
+                passthrough=1
+                i=0
+            else
+                commandLine[i]="$arg"
+                ((i++))
+            fi
+        else
+            RUN_passthroughCommandLine[i]="$arg"
+            ((i++))
+        fi
+    done
+    verbose1 "RUN_passthroughCommandLine: ${RUN_passthroughCommandLine[*]}"
+    verbose1 "commandLine: ${commandLine[*]}"
+
+    # run getopt twice to report usage error first and then parse options
+    error=$(getopt --options=$APP_OPTS_SHORT \
         --longoptions=$APP_OPTS_LONG \
         --quiet-output \
-        -- "${RUN_commandLine[@]}" 2>&1)
-    [ -n "$parsed" ] && usageError "$parsed"
+        -- "${commandLine[@]}" 2>&1)
+    [ -n "$error" ] && usageError "$error"
     # if the above didn't generate usage error, we continue
-    parsed=$(getopt --options=$APP_OPTS_SHORT \
+    parsedCommandLine=$(getopt --options=$APP_OPTS_SHORT \
         --longoptions=$APP_OPTS_LONG \
-        -- "${RUN_commandLine[@]}")
+        -- "${commandLine[@]}")
+    verbose1 "parsedCommandLine: ${parsedCommandLine[*]}"
 
     # short circuit help and version
     # read getopt’s output this way to handle the quoting right:
-    eval set -- "$parsed"
+    eval set -- "$parsedCommandLine"
     while true; do
         case "$1" in
             -h|--help)
@@ -907,7 +920,7 @@ processCommandLine() {
 
     # if we didn't terminate early via short circuit, then process commands
     # read getopt’s output this way to handle the quoting right:
-    eval set -- "$parsed"
+    eval set -- "$parsedCommandLine"
     while true; do
         case "$1" in
             -A|--all)
@@ -916,8 +929,7 @@ processCommandLine() {
                 ;;
             -c|--cat)
                 setCommand 'cat'
-                RUN_id="$2" && debug "set RUN_id: $RUN_id"
-                shift 2
+                shift
                 ;;
             --clone-ghrepo)
                 setCommand 'clone-ghrepo'
@@ -934,8 +946,7 @@ processCommandLine() {
                 ;;
             -d|--delete)
                 setCommand 'delete'
-                RUN_id="$2" && debug "set RUN_id: $RUN_id"
-                shift 2
+                shift
                 ;;
             --deploy-key)
                 setOption '--deploy-key'
@@ -944,11 +955,14 @@ processCommandLine() {
                 ;;
             -e|--edit)
                 setCommand 'edit'
-                RUN_id="$2" && debug "set RUN_id: $RUN_id"
-                shift 2
+                shift
                 ;;
             --gen-deploy-key)
                 setOption '--gen-deploy-key'
+                shift
+                ;;
+            --git)
+                setCommand 'git'
                 shift
                 ;;
             -g|--grep)
@@ -973,8 +987,7 @@ processCommandLine() {
                 ;;
             -m|--move)
                 setCommand 'move'
-                RUN_id="$2" && debug "set RUN_id: $RUN_id"
-                shift 2
+                shift
                 ;;
             --no-color)
                 #ignore, handled in preprocessCommandLine()
@@ -1033,6 +1046,10 @@ processCommandLine() {
                 ;;
             --)
                 shift
+                # remaining arguments are concatenated to allow a search for
+                # a note title with spaces
+                RUN_query="$*" && verbose1 "RUN_query: $RUN_query"
+                shift "${#@}"
                 break
                 ;;
             *)
@@ -1040,7 +1057,6 @@ processCommandLine() {
                 ;;
         esac
     done
-    RUN_passthroughArgs=("$@") && verbose1 "passthrough Commands: ${RUN_passthroughArgs[*]}"
     exitFn 0
 }
 
@@ -1077,7 +1093,7 @@ setSedSubstitutions() {
     # escaped for variables in LHS (PATTERN) of sed
     RUN_sed_escaped_home="$(printf '%s' "$HOME" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_home: $RUN_sed_escaped_home"
     RUN_sed_escaped_pwd="$(printf '%s' "$RUN_pwd" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwd: $RUN_sed_escaped_pwd"
-    RUN_sed_escaped_id="$(printf '%s' "$RUN_id" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_id: $RUN_sed_escaped_id"
+    RUN_sedEscQuery="$(printf '%s' "$RUN_query" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sedEscQuery: $RUN_sedEscQuery"
     RUN_sed_escaped_tag="$(printf '%s' "$RUN_tag" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_tag: $RUN_sed_escaped_tag"
     RUN_pwdHomeTilde="$(printf '%s\n' "$RUN_pwd" | sed -E "s/^$RUN_sed_escaped_home/~/")" && debug "set RUN_pwdHomeTilde: $RUN_pwdHomeTilde"
     RUN_sed_escaped_pwdHomeTilde="$(printf '%s' "$RUN_pwdHomeTilde" | sed -re 's/[]\/$*.^[]/\\&/g')" && debug "set RUN_sed_escaped_pwdHomeTilde: $RUN_sed_escaped_pwdHomeTilde"
@@ -1201,22 +1217,17 @@ branchOnCommand() {
             runNukeRepo
             ;;
         *)
+            # commands that operate on existing repo
             changeToRepoDir
             checkRepoConsistency
             invokeBackgroundGitPull
             # continue with matching subsequent patterns
             case "$RUN_command" in
-                cat)
-                    runCat
-                    ;;
                 data-dir)
                     runDataDir
                     ;;
-                delete)
-                    runDelete
-                    ;;
-                edit)
-                    runEdit
+                git)
+                    runGit
                     ;;
                 grep)
                     runGrep
@@ -1227,9 +1238,6 @@ branchOnCommand() {
                 list-tags)
                     runListTags
                     ;;
-                move)
-                    runMove
-                    ;;
                 new)
                     runNew
                     ;;
@@ -1237,7 +1245,28 @@ branchOnCommand() {
                     runRepoDir
                     ;;
                 *)
-                    fatal "internal error: unreachable RUN_command case: $RUN_command"
+                    #commands requiring query
+                    if ! queryNote; then
+                        fatal "could not execute $RUN_command"
+                    fi
+                    # continue with matching subsequent patterns
+                    case "$RUN_command" in
+                        cat)
+                            runCat
+                            ;;
+                        delete)
+                            runDelete
+                            ;;
+                        edit)
+                            runEdit
+                            ;;
+                        move)
+                            runMove
+                            ;;
+                        *)
+                            fatal "internal error: unreachable RUN_command case: $RUN_command"
+                            ;;
+                    esac
                     ;;
             esac
             ;;
