@@ -26,7 +26,7 @@
 
 # app consts #
 
-APP_VERSION='nh 0.6.0'
+APP_VERSION='nh 0.6.1'
 APP_DEPENDENCIES=(git ssh uuidgen)
 APP_USAGE='nh - Note Here
 
@@ -435,10 +435,10 @@ doUpdateNhftValue() {
     exitFn 0
 }
 
-# returns 0 if successfully finds matching note, else returns 1
 queryNote() {
     enterFn
     local matches
+    [ -z "$RUN_query" ] && fatal "QUERY is required for command $RUN_command"
     # check for matches based on title or uuid
     [ -f ./index_titles ] && mapfile -t matches < <(sed -nE -e "s/^([0-9a-f-]{36}) $RUN_sedEscQuery.*$/\1/p" -e "s/^($RUN_sedEscQuery[0-9a-f-]{0,35}).*$/\1/p" ./index_titles)
     # check we have at least one real result
@@ -447,15 +447,13 @@ queryNote() {
         for id in "${matches[@]}"; do
             output "$(doPrintMeta "$id")"
         done
-        exitFn 1
+        fatal "command $RUN_command must match a single note"
     elif ! [ -f ./meta/"${matches[0]}" ]; then
-        warn "No note found matching: $RUN_query*"
-        exitFn 1
-    else
-        RUN_id="${matches[0]}"
-        verbose1 "Matched note: $RUN_id"
-        exitFn 0
+        fatal "No note found matching: $RUN_query*"
     fi
+    RUN_id="${matches[0]}"
+    verbose1 "Matched note: $RUN_id"
+    exitFn 0
 }
 
 # run functions #
@@ -819,6 +817,7 @@ readConfigFile() {
             if [ -f "$d"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
                 debug 'found config via XDG_CONFIG_DIRS env variable'
                 configFile="$d"/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" && debug "set configFile: $configFile"
+                break
             fi
         done
     elif [ -f /etc/xdg/"$APP_DIR_NAME"/"$APP_CONFIG_NAME" ]; then
@@ -1200,75 +1199,71 @@ branchOnCommand() {
     verbose1 "Running command: $RUN_command"
 
     case "$RUN_command" in
-        clone-ghrepo)
+        data-dir)
+            runDataDir
+            ;;
+        repo-dir)
+            runRepoDir
+            ;;
+        *)
+            # fallthrough to commands that operate in datadir
             changeToDataDir
+            ;;&
+        clone-ghrepo)
             runCloneGhRepo
             ;;
         list-repos)
-            changeToDataDir
             runListRepos
             ;;
         new-lrepo)
-            changeToDataDir
             runNewLRepo
             ;;
-        nuke-repo)
+        *)
+            # fallthrough to commands that operate in repo dir
             changeToRepoDir
+            # fallthrough
+            ;;&
+        git)
+            runGit
+            ;;
+        nuke-repo)
             runNukeRepo
             ;;
         *)
-            # commands that operate on existing repo
-            changeToRepoDir
+            # fallthrough to commands that trigger git
             checkRepoConsistency
             invokeBackgroundGitPull
-            # continue with matching subsequent patterns
-            case "$RUN_command" in
-                data-dir)
-                    runDataDir
-                    ;;
-                git)
-                    runGit
-                    ;;
-                grep)
-                    runGrep
-                    ;;
-                list)
-                    runList
-                    ;;
-                list-tags)
-                    runListTags
-                    ;;
-                new)
-                    runNew
-                    ;;
-                repo-dir)
-                    runRepoDir
-                    ;;
-                *)
-                    #commands requiring query
-                    if ! queryNote; then
-                        fatal "could not execute $RUN_command"
-                    fi
-                    # continue with matching subsequent patterns
-                    case "$RUN_command" in
-                        cat)
-                            runCat
-                            ;;
-                        delete)
-                            runDelete
-                            ;;
-                        edit)
-                            runEdit
-                            ;;
-                        move)
-                            runMove
-                            ;;
-                        *)
-                            fatal "internal error: unreachable RUN_command case: $RUN_command"
-                            ;;
-                    esac
-                    ;;
-            esac
+            ;;&
+        grep)
+            runGrep
+            ;;
+        list)
+            runList
+            ;;
+        list-tags)
+            runListTags
+            ;;
+        new)
+            runNew
+            ;;
+        *)
+            # fallthrough to commands requiring query
+            queryNote
+            ;;&
+        cat)
+            runCat
+            ;;
+        delete)
+            runDelete
+            ;;
+        edit)
+            runEdit
+            ;;
+        move)
+            runMove
+            ;;
+        *)
+            fatal "internal error: unreachable RUN_command case: $RUN_command"
             ;;
     esac
     exitFn "$?"

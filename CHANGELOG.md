@@ -1,3 +1,14 @@
+# 0.6.1
+
+## Bugfixes
+
+* `--data-dir`, `--repo-dir` and `--git` commands all bypass repo consistency
+  check and can thus be used to help repair underlying repo errors
+* Empty `QUERY` when required now causes a fatal error instead of a malestrom
+  of ouput iterating over all files in the repo
+* When hunting for a config file in `XDG_CONFIG_DIRS`, will now break on first
+  found file
+
 # 0.6.0
 
 ## Breaking Changes
